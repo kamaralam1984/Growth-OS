@@ -13,7 +13,13 @@ WORKDIR /app
 # openssl is required by Prisma's query engine on Alpine (musl) images.
 RUN apk add --no-cache openssl
 
-COPY package.json package-lock.json ./
+COPY package.json package-lock.json prisma.config.ts ./
+# package.json's postinstall script runs `prisma generate`, which needs the
+# real schema (and prisma.config.ts, which points at it — see that file's
+# own "Loaded Prisma config from prisma.config.ts" log line) — copy both in
+# before `npm ci` runs, or postinstall fails with "Could not find Prisma
+# Schema" before any dependency is even usable.
+COPY prisma ./prisma
 RUN npm ci
 
 # ---------- build: compile the real Next.js production build ----------
