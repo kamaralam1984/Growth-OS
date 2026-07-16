@@ -4,16 +4,25 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    # Bound to loopback only — not exposed to the public internet directly.
-    # In production (the "prod" profile below) Caddy is the only public
-    # entry point, terminating TLS and reverse-proxying to this port; for
-    # plain local/self-hosted use without Caddy, reach it via
-    # `curl http://localhost:3000` on the host itself or an SSH tunnel.
+    # Bound to loopback only, on a host port set via APP_HOST_PORT — this VPS
+    # already runs several other services on 3000-3010/3020/3022/3200-3204/
+    # 4200/5000/8000-8002/etc (surveyed via `ss -tlnp` before picking this),
+    # so never assume 3000 is free on a shared host. The real public entry
+    # point is this host's existing native nginx (already fronting several
+    # other domains on 80/443), reverse-proxying
+    # growthos.kvlbusinesssolutions.com to 127.0.0.1:${APP_HOST_PORT} — not a
+    # second proxy/TLS stack in Docker, which would fight nginx for the port.
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:${APP_HOST_PORT:?set APP_HOST_PORT in your .env to a free host port, e.g. 3030}:3000"
     environment:
       # Real service-to-service wiring — hostnames are the compose service
-      # names below, resolved via Docker's internal DNS.
+      # names below, resolved via Docker's internal DNS. Postgres/Redis are
+      # NOT published to the host at all (see those services below) — this
+      # host already runs a native Postgres on 5432 and native+dockerized
+      # Redis on 6379, so publishing the same ports here would either
+      # conflict or silently shadow the wrong instance. Container-to-
+      # container traffic on the compose network doesn't need host
+      # publishing regardless.
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your .env file, e.g. via: openssl rand -hex 24}@postgres:5432/kvl_growthos?schema=public
       REDIS_URL: redis://redis:6379
       NODE_ENV: production
@@ -21,13 +30,14 @@ services:
       #   openssl rand -base64 32
       AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET in your .env file, e.g. via: openssl rand -base64 32}
       # Real public URL of this deployment — required so Auth.js generates
-      # correct callback/redirect URLs when running behind Caddy instead of
-      # being accessed directly. Leave unset for plain localhost use.
+      # correct callback/redirect URLs when running behind the host's nginx
+      # instead of being accessed directly. Leave unset for plain localhost
+      # use with no reverse proxy.
       AUTH_URL: ${AUTH_URL:-}
       # Always true in this compose topology: the app is only ever reached
-      # through the Caddy reverse proxy (or a local port-forward), never
-      # directly from the internet, so Auth.js can safely trust the
-      # X-Forwarded-Host header Caddy sets.
+      # through the host's reverse proxy (nginx) or a local port-forward,
+      # never directly from the internet, so Auth.js can safely trust the
+      # X-Forwarded-Host header the proxy sets.
       AUTH_TRUST_HOST: "true"
       # The 5 independent AES-256-GCM key domains — see .env.example for what
       # each protects. All optional: each feature honestly degrades to
@@ -73,12 +83,15 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your .env file, e.g. via: openssl rand -hex 24}
       POSTGRES_DB: kvl_growthos
-    # Loopback-only — the database is never exposed to the public internet.
-    # App/redis reach it via Docker's internal network regardless of this
-    # host-port publish; this is purely for host-side debugging (psql over
-    # an SSH tunnel), same reasoning as the app service above.
+    # Loopback-only, on a free host port set via POSTGRES_HOST_PORT — this
+    # host's own native Postgres already owns 5432, so this must be a
+    # different port. Published (rather than left fully internal) so
+    # `prisma migrate deploy` can run from the VPS host itself, the same way
+    # this repo's own CI does it (see .github/workflows/deploy.yml) — never
+    # from inside the minimal production image, which doesn't ship the
+    # Prisma CLI.
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:?set POSTGRES_HOST_PORT in your .env to a free host port, e.g. 5478}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -90,9 +103,7 @@ services:
   redis:
     image: redis:7
     restart: unless-stopped
-    # Loopback-only — same reasoning as postgres above.
-    ports:
-      - "127.0.0.1:6379:6379"
+    # No host port published — same reasoning as postgres above.
     volumes:
       - redis_data:/data
     healthcheck:
@@ -101,29 +112,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # Real public entry point for a production deployment — terminates TLS
-  # (automatic Let's Encrypt via Caddy, zero manual cert config) and reverse
-  # proxies to the app service over Docker's internal network. Only started
-  # with `docker compose --profile prod up -d` — plain `docker compose up`
-  # (local/dev use) never starts it, matching how AUTH_SECRET/POSTGRES_PASSWORD
-  # are already required-but-dev-still-works via .env.
-  caddy:
-    image: caddy:2
-    profiles: ["prod"]
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - app
-
 volumes:
   postgres_data:
   redis_data:
   storage_documents:
-  caddy_data:
-  caddy_config:
