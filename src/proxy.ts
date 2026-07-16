@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 
 import { auth } from "@/auth";
 import { checkRateLimitDegradable } from "@/lib/security/rate-limit-distributed";
+import { clientIpFromHeaders } from "@/lib/security/client-ip";
 
 /**
  * NOTE ON NAMING: this project is on Next.js 16, where the `middleware.ts`
@@ -93,9 +94,7 @@ function isRateLimitedAuthPath(pathname: string): boolean {
 }
 
 function clientIp(request: NextRequest): string {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  if (forwardedFor) return forwardedFor.split(",")[0]?.trim() || "unknown";
-  return request.headers.get("x-real-ip") ?? "unknown";
+  return clientIpFromHeaders(request.headers);
 }
 
 function refererOrigin(referer: string | null): string | null {

@@ -18,8 +18,8 @@ import type { DocumentEngineKind } from "@/lib/documents/blueprint";
 function verifySignature(rawBody: string, signatureHeader: string | null): boolean {
   const secret = process.env.DOCUSIGN_WEBHOOK_HMAC_SECRET;
   if (!secret) {
-    console.warn("[webhooks/docusign] DOCUSIGN_WEBHOOK_HMAC_SECRET not set — accepting payload WITHOUT signature verification.");
-    return true;
+    console.error("[webhooks/docusign] DOCUSIGN_WEBHOOK_HMAC_SECRET not set — rejecting payload (integration Not Configured).");
+    return false;
   }
   if (!signatureHeader) return false;
   const expected = createHmac("sha256", secret).update(rawBody, "utf8").digest("base64");

@@ -22,6 +22,7 @@ import net from "node:net";
 
 const OUTGOING_FETCH_TIMEOUT_MS = 15_000;
 const MAX_RESPONSE_SNIPPET_CHARS = 2000;
+const MAX_REDIRECTS = 5;
 
 function ipv4ToLong(ip: string): number {
   return ip.split(".").reduce((acc, octet) => (acc << 8) + Number(octet), 0) >>> 0;
@@ -64,6 +65,29 @@ function isPrivateOrLocalHostname(hostname: string): boolean {
   return h === "localhost" || h.endsWith(".local") || h.endsWith(".internal") || h === "0.0.0.0";
 }
 
+/** Throws with a descriptive message if `hostname` is local/private — shared by assertPublicUrl (initial URL) and the redirect loop in performOutgoingRequest (every subsequent hop). */
+async function assertPublicHostname(hostname: string, fieldLabel: string): Promise<void> {
+  if (isPrivateOrLocalHostname(hostname)) {
+    throw new Error(`${fieldLabel} node's "url" targets a local/internal hostname ("${hostname}") — not allowed.`);
+  }
+  if (net.isIP(hostname)) {
+    const isPrivate = net.isIPv4(hostname) ? isPrivateIpv4(hostname) : isPrivateIpv6(hostname);
+    if (isPrivate) throw new Error(`${fieldLabel} node's "url" targets a private/internal IP address ("${hostname}") — not allowed.`);
+    return;
+  }
+  try {
+    const records = await dns.lookup(hostname, { all: true });
+    if (records.length === 0) throw new Error(`${fieldLabel} node's "url" hostname "${hostname}" did not resolve to any address.`);
+    for (const record of records) {
+      const isPrivate = record.family === 4 ? isPrivateIpv4(record.address) : isPrivateIpv6(record.address);
+      if (isPrivate) throw new Error(`${fieldLabel} node's "url" hostname "${hostname}" resolves to a private/internal IP address — not allowed.`);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes(hostname)) throw error;
+    throw new Error(`${fieldLabel} node could not resolve "${hostname}".`);
+  }
+}
+
 export async function assertPublicUrl(raw: unknown, fieldLabel: string): Promise<URL> {
   if (typeof raw !== "string" || raw.trim() === "") {
     throw new Error(`${fieldLabel} node config must include a non-empty string "url".`);
@@ -78,26 +102,7 @@ export async function assertPublicUrl(raw: unknown, fieldLabel: string): Promise
     throw new Error(`${fieldLabel} node's "url" must be http:// or https://, got "${url.protocol}".`);
   }
 
-  const hostname = url.hostname;
-  if (isPrivateOrLocalHostname(hostname)) {
-    throw new Error(`${fieldLabel} node's "url" targets a local/internal hostname ("${hostname}") — not allowed.`);
-  }
-  if (net.isIP(hostname)) {
-    const isPrivate = net.isIPv4(hostname) ? isPrivateIpv4(hostname) : isPrivateIpv6(hostname);
-    if (isPrivate) throw new Error(`${fieldLabel} node's "url" targets a private/internal IP address ("${hostname}") — not allowed.`);
-    return url;
-  }
-  try {
-    const records = await dns.lookup(hostname, { all: true });
-    if (records.length === 0) throw new Error(`${fieldLabel} node's "url" hostname "${hostname}" did not resolve to any address.`);
-    for (const record of records) {
-      const isPrivate = record.family === 4 ? isPrivateIpv4(record.address) : isPrivateIpv6(record.address);
-      if (isPrivate) throw new Error(`${fieldLabel} node's "url" hostname "${hostname}" resolves to a private/internal IP address — not allowed.`);
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message.includes(hostname)) throw error;
-    throw new Error(`${fieldLabel} node could not resolve "${hostname}".`);
-  }
+  await assertPublicHostname(url.hostname, fieldLabel);
   return url;
 }
 
@@ -117,16 +122,60 @@ export async function performOutgoingRequest(
   headers: Record<string, string>,
   body: unknown,
 ): Promise<OutgoingRequestResult> {
+  // redirect: "manual" + per-hop re-validation, same as
+  // src/lib/scanner/safe-fetch.ts — assertPublicUrl only validated the
+  // ORIGINAL url; fetch's default redirect: "follow" would otherwise let a
+  // validated public host 302 this request to an internal address (e.g. the
+  // cloud metadata service) with no further checking, a clean SSRF bypass
+  // for any workflow HTTP-request/webhook-delivery node pointed at an
+  // attacker-controlled public host.
+  let currentUrl = url;
+  let currentMethod = method;
+  let currentBody = body;
   let response: Response;
-  try {
-    response = await fetch(url.toString(), {
-      method,
-      headers: body !== undefined ? { "Content-Type": "application/json", ...headers } : headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(OUTGOING_FETCH_TIMEOUT_MS),
-    });
-  } catch (error) {
-    throw new Error(`${fieldLabel} node's request to "${url.toString()}" failed: ${error instanceof Error ? error.message : "unknown fetch error"}.`);
+
+  for (let hop = 0; ; hop++) {
+    if (hop > 0) await assertPublicHostname(currentUrl.hostname, fieldLabel);
+    if (hop > MAX_REDIRECTS) {
+      throw new Error(`${fieldLabel} node's request to "${url.toString()}" followed too many redirects.`);
+    }
+
+    try {
+      response = await fetch(currentUrl.toString(), {
+        method: currentMethod,
+        headers: currentBody !== undefined ? { "Content-Type": "application/json", ...headers } : headers,
+        body: currentBody !== undefined ? JSON.stringify(currentBody) : undefined,
+        redirect: "manual",
+        signal: AbortSignal.timeout(OUTGOING_FETCH_TIMEOUT_MS),
+      });
+    } catch (error) {
+      throw new Error(`${fieldLabel} node's request to "${currentUrl.toString()}" failed: ${error instanceof Error ? error.message : "unknown fetch error"}.`);
+    }
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (!location) throw new Error(`${fieldLabel} node's request to "${currentUrl.toString()}" received a redirect (${response.status}) with no destination.`);
+      let redirectUrl: URL;
+      try {
+        redirectUrl = new URL(location, currentUrl);
+      } catch {
+        throw new Error(`${fieldLabel} node's request to "${currentUrl.toString()}" received a redirect to an invalid URL.`);
+      }
+      if (redirectUrl.protocol !== "http:" && redirectUrl.protocol !== "https:") {
+        throw new Error(`${fieldLabel} node's request to "${currentUrl.toString()}" received a redirect to a non-http(s) URL.`);
+      }
+      // Same method/body-dropping semantics as a real browser/fetch's
+      // redirect: "follow" mode: 303 always downgrades to GET with no
+      // body; 301/302 downgrade a POST to GET (legacy but standard
+      // behavior); 307/308 preserve method and body.
+      if (response.status === 303 || ((response.status === 301 || response.status === 302) && currentMethod === "POST")) {
+        currentMethod = "GET";
+        currentBody = undefined;
+      }
+      currentUrl = redirectUrl;
+      continue;
+    }
+    break;
   }
 
   const rawBody = await response.text().catch(() => "");

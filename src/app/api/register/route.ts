@@ -5,11 +5,10 @@ import { registerSchema } from "@/lib/validations/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { sendVerificationEmail } from "@/lib/auth/verification-actions";
 import { hashPassword } from "@/lib/auth/password";
+import { clientIpFromHeaders } from "@/lib/security/client-ip";
 
 function clientIp(request: Request): string {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  if (forwardedFor) return forwardedFor.split(",")[0]?.trim() || "unknown";
-  return request.headers.get("x-real-ip") ?? "unknown";
+  return clientIpFromHeaders(request.headers);
 }
 
 export async function POST(request: Request) {

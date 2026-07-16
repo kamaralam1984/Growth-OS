@@ -9,6 +9,7 @@ import { evaluateAutomationRules } from "@/lib/automation-engine";
 import { fireWorkflowTrigger } from "@/lib/workflows/triggers";
 import { markParentDocumentSigned } from "@/lib/documents";
 import { manualSignatureSubmitSchema, type ManualSignatureSubmitInput } from "@/lib/validations/documents";
+import { clientIpFromHeaders } from "@/lib/security/client-ip";
 import type { DocumentKind } from "@/generated/prisma/client";
 
 export interface ActionResult {
@@ -18,9 +19,7 @@ export interface ActionResult {
 
 async function clientIp(): Promise<string> {
   const h = await headers();
-  const forwardedFor = h.get("x-forwarded-for");
-  if (forwardedFor) return forwardedFor.split(",")[0]?.trim() || "unknown";
-  return h.get("x-real-ip") ?? "unknown";
+  return clientIpFromHeaders(h);
 }
 
 async function resolveDocumentTitle(docKind: DocumentKind, docId: string): Promise<string | null> {

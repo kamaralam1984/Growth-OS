@@ -13,6 +13,8 @@ import { prisma } from "@/lib/prisma";
 import { recordDeviceSession } from "@/lib/device-session";
 import { checkRateLimitDegradable } from "@/lib/security/rate-limit-distributed";
 import { verifyPassword, rehashIfNeeded } from "@/lib/auth/password";
+import { decryptTwoFactorSecret } from "@/lib/auth/two-factor-crypto";
+import { clientIpFromHeaders } from "@/lib/security/client-ip";
 import { logSecurityEvent } from "@/lib/security/security-events";
 import { reportIpReputationToSecurityEvents } from "@/lib/security/ip-reputation";
 import { sendEmail } from "@/lib/email";
@@ -76,9 +78,7 @@ const REMEMBER_ME_MAX_AGE = 30 * 24 * 60 * 60;
 const SESSION_ONLY_MAX_AGE = 24 * 60 * 60;
 
 function clientIp(request: Request): string {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  if (forwardedFor) return forwardedFor.split(",")[0]?.trim() || "unknown";
-  return request.headers.get("x-real-ip") ?? "unknown";
+  return clientIpFromHeaders(request.headers);
 }
 
 /**
@@ -354,8 +354,33 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           if (typeof code !== "string" || code.trim().length === 0) {
             throw new TwoFactorRequiredSignin("Enter your two-factor authentication code.");
           }
-          const result = await verifyTotp({ secret: user.twoFactorSecret, token: code.trim(), epochTolerance: 30 });
+          const secret = decryptTwoFactorSecret(user.twoFactorSecret);
+          const result = await verifyTotp({ secret, token: code.trim(), epochTolerance: 30 });
           if (!result.valid) {
+            // A correct password already proved possession of the account,
+            // so a wrong TOTP code counts toward the same persistent
+            // lockout as a wrong password — otherwise the IP-keyed rate
+            // limiter above is the only thing standing between an attacker
+            // who has phished/leaked a password and unlimited TOTP
+            // guessing (6 digits is only ~1M possibilities).
+            const attempts = user.failedLoginAttempts + 1;
+            const willLock = attempts >= MAX_FAILED_ATTEMPTS;
+            if (willLock) {
+              await prisma.user.update({
+                where: { id: user.id },
+                data: { failedLoginAttempts: 0, lockedUntil: new Date(Date.now() + LOCKOUT_MINUTES * 60_000) },
+              });
+            } else {
+              await prisma.user.update({ where: { id: user.id }, data: { failedLoginAttempts: attempts } });
+            }
+            void logSecurityEvent({
+              userId: user.id,
+              type: willLock ? "BRUTE_FORCE_DETECTED" : "LOGIN_FAILED",
+              severity: willLock ? "CRITICAL" : "WARNING",
+              ipAddress: ip,
+              userAgent: request.headers.get("user-agent"),
+              detail: `${email} (invalid TOTP)`,
+            });
             throw new TwoFactorInvalidSignin("That code didn't match. Please try again.");
           }
         }

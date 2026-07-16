@@ -24,12 +24,25 @@ export async function upsertWhiteLabelSettings(
 const LOGO_MAX_BYTES = 2 * 1024 * 1024;
 const FAVICON_MAX_BYTES = 512 * 1024;
 
-/** Real content-type allowlist, keyed to the file extension we persist the asset under so the serving route can infer Content-Type without a dedicated mimeType column. */
+/**
+ * Real content-type allowlist, keyed to the file extension we persist the
+ * asset under so the serving route can infer Content-Type without a
+ * dedicated mimeType column.
+ *
+ * Deliberately raster-only — no image/svg+xml. This asset is served
+ * back (src/app/api/white-label/assets/[organizationId]/[kind]/route.ts)
+ * with its real content-type and no Content-Disposition: attachment (it
+ * needs to render inline as a logo/favicon), and any org OWNER/ADMIN can
+ * upload it — an SVG can carry a <script>/event-handler payload that
+ * executes if a same-org member ever opens the raw asset URL directly
+ * (not just via an <img> tag, which doesn't execute embedded scripts, but
+ * direct navigation or framing does). Rejecting SVG at upload time closes
+ * that off entirely rather than depending on response-header precedence.
+ */
 const ALLOWED_IMAGE_EXTENSION_BY_TYPE: Record<string, string> = {
   "image/png": "png",
   "image/jpeg": "jpg",
   "image/webp": "webp",
-  "image/svg+xml": "svg",
   "image/gif": "gif",
   "image/x-icon": "ico",
   "image/vnd.microsoft.icon": "ico",
@@ -58,7 +71,7 @@ export async function uploadWhiteLabelLogo(
 
   const ext = ALLOWED_IMAGE_EXTENSION_BY_TYPE[file.type];
   if (!ext) {
-    throw new Error(`Unsupported image type "${file.type || "unknown"}". Use PNG, JPEG, WebP, GIF, SVG, or ICO.`);
+    throw new Error(`Unsupported image type "${file.type || "unknown"}". Use PNG, JPEG, WebP, GIF, or ICO.`);
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());

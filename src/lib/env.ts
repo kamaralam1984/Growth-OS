@@ -92,8 +92,11 @@ const EnvSchema = z.object({
   BITBUCKET_CLIENT_SECRET: z.string().optional(),
 
   // ---- Encryption keys ----
+  AGENT_MEMORY_ENCRYPTION_KEY: z.string().optional(),
   INTEGRATION_TOKEN_ENCRYPTION_KEY: z.string().optional(),
   SECRETS_MANAGER_ENCRYPTION_KEY: z.string().optional(),
+  WEBHOOK_SECRET_ENCRYPTION_KEY: z.string().optional(),
+  TWO_FACTOR_SECRET_ENCRYPTION_KEY: z.string().optional(),
 
   // ---- Platform Billing Engine gateways ----
   STRIPE_SECRET_KEY: z.string().optional(),

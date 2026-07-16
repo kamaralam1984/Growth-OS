@@ -20,6 +20,17 @@ export interface FileStore {
   remove(storageKey: string): Promise<void>;
 }
 
+/**
+ * `resolved.startsWith(storageRoot)` alone would also accept a sibling
+ * directory that merely shares storageRoot as a string prefix (e.g.
+ * storageRoot `.../storage/documents` would pass for a resolved path under
+ * `.../storage/documents-evil/`) — require the exact root or root+separator
+ * so containment is real, not just textual.
+ */
+function isWithinRoot(resolved: string, root: string): boolean {
+  return resolved === root || resolved.startsWith(root + path.sep);
+}
+
 export function createFileStore(subdir: string): FileStore {
   const storageRoot = path.join(process.cwd(), "storage", subdir);
 
@@ -34,7 +45,7 @@ export function createFileStore(subdir: string): FileStore {
 
     async read(storageKey) {
       const resolved = path.join(storageRoot, storageKey);
-      if (!resolved.startsWith(storageRoot)) {
+      if (!isWithinRoot(resolved, storageRoot)) {
         throw new Error("Invalid storage key.");
       }
       return readFile(resolved);
@@ -42,7 +53,7 @@ export function createFileStore(subdir: string): FileStore {
 
     async remove(storageKey) {
       const resolved = path.join(storageRoot, storageKey);
-      if (!resolved.startsWith(storageRoot)) return;
+      if (!isWithinRoot(resolved, storageRoot)) return;
       await unlink(resolved).catch(() => {});
     },
   };

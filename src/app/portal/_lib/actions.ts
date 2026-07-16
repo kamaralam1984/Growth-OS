@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
@@ -9,8 +10,14 @@ import { getAppBaseUrl } from "@/lib/outreach/tracking";
 import { issueClientAuthToken, consumeClientAuthToken } from "@/lib/client-portal/tokens";
 import { verifyPassword, rehashIfNeeded } from "@/lib/auth/password";
 import { createClientSession, clearClientSessionCookie, getClientPortalSession, getCurrentSessionId, revokeClientSession } from "@/lib/client-portal/auth";
-import { upsertClientDevice } from "@/lib/client-portal/devices";
+import { upsertClientDevice, getClientIpAddress } from "@/lib/client-portal/devices";
+import { checkRateLimitDegradable } from "@/lib/security/rate-limit-distributed";
+import { logSecurityEvent } from "@/lib/security/security-events";
 import { clientMagicLinkRequestSchema, clientPasswordLoginSchema, type ClientMagicLinkRequestInput, type ClientPasswordLoginInput } from "@/lib/validations/client-portal";
+
+/** Same persistent-lockout shape as the main app's login (src/auth.ts). */
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_MINUTES = 15;
 
 export interface ActionResult {
   ok: boolean;
@@ -48,12 +55,26 @@ async function findOrCreatePortalUser(email: string): Promise<{ ok: true; client
   return { ok: true, clientPortalUserId: portalUser.id };
 }
 
+/**
+ * Always returns a generic { ok: true } (or a schema-validation error for
+ * the input itself), regardless of whether the email matches a real client
+ * account — same reasoning as the main app's /api/forgot-password. Before
+ * this fix, a "we couldn't find a client account with that email" response
+ * let an anonymous caller enumerate which emails are registered clients;
+ * the real work (issuing a token + sending an email) still only happens on
+ * an actual match. The rarer multi-org-collision case is logged
+ * server-side (an operator can follow up) rather than surfaced, for the
+ * same reason.
+ */
 export async function requestMagicLink(input: ClientMagicLinkRequestInput): Promise<ActionResult> {
   const parsed = clientMagicLinkRequestSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Enter a valid email address." };
 
   const resolved = await findOrCreatePortalUser(parsed.data.email);
-  if (!resolved.ok) return resolved;
+  if (!resolved.ok) {
+    console.warn(`[portal] magic-link request for ${parsed.data.email} did not resolve to a single client: ${resolved.error}`);
+    return { ok: true };
+  }
 
   const rawToken = await issueClientAuthToken(resolved.clientPortalUserId, "LOGIN");
   const verifyUrl = `${getAppBaseUrl()}/portal/verify?token=${rawToken}`;
@@ -92,13 +113,53 @@ export async function loginWithPassword(input: ClientPasswordLoginInput): Promis
   const parsed = clientPasswordLoginSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Please check your details." };
 
-  const portalUser = await prisma.clientPortalUser.findUnique({ where: { email: parsed.data.email.trim().toLowerCase() } });
+  const email = parsed.data.email.trim().toLowerCase();
+  const ip = (await getClientIpAddress()) ?? "unknown";
+  const userAgent = (await headers()).get("user-agent");
+
+  // Cap sign-in attempts per email+IP before touching the password hash at
+  // all — same distributed, degrade-gracefully-not-fail-open limiter the
+  // main app's Credentials provider uses (src/auth.ts).
+  const rate = await checkRateLimitDegradable(`portal-login:${email}:${ip}`, { limit: 10, windowMs: 10 * 60_000 });
+  if (!rate.allowed) {
+    return { ok: false, error: "Too many sign-in attempts. Please try again in a few minutes." };
+  }
+
+  const portalUser = await prisma.clientPortalUser.findUnique({ where: { email } });
   if (!portalUser || !portalUser.passwordHash || !portalUser.active) {
     return { ok: false, error: "Incorrect email or password." };
   }
 
+  // Persistent lockout — independent of the rolling rate limiter above, and
+  // not reset by a process restart. Mirrors User.lockedUntil in src/auth.ts.
+  if (portalUser.lockedUntil && portalUser.lockedUntil > new Date()) {
+    return { ok: false, error: "This account is temporarily locked after too many failed sign-in attempts. Please try again later." };
+  }
+
   const isValid = await verifyPassword(parsed.data.password, portalUser.passwordHash);
-  if (!isValid) return { ok: false, error: "Incorrect email or password." };
+  if (!isValid) {
+    const attempts = portalUser.failedLoginAttempts + 1;
+    const willLock = attempts >= MAX_FAILED_ATTEMPTS;
+    await prisma.clientPortalUser.update({
+      where: { id: portalUser.id },
+      data: willLock
+        ? { failedLoginAttempts: 0, lockedUntil: new Date(Date.now() + LOCKOUT_MINUTES * 60_000) }
+        : { failedLoginAttempts: attempts },
+    });
+    void logSecurityEvent({
+      type: willLock ? "BRUTE_FORCE_DETECTED" : "LOGIN_FAILED",
+      severity: willLock ? "CRITICAL" : "WARNING",
+      organizationId: portalUser.organizationId,
+      ipAddress: ip,
+      userAgent,
+      detail: `client-portal: ${email}`,
+    });
+    return { ok: false, error: "Incorrect email or password." };
+  }
+
+  if (portalUser.failedLoginAttempts > 0 || portalUser.lockedUntil) {
+    await prisma.clientPortalUser.update({ where: { id: portalUser.id }, data: { failedLoginAttempts: 0, lockedUntil: null } });
+  }
 
   const rehashed = await rehashIfNeeded(parsed.data.password, portalUser.passwordHash);
   if (rehashed) {

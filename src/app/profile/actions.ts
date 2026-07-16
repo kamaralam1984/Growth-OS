@@ -13,6 +13,8 @@ import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
 import { logSecurityEvent } from "@/lib/security/security-events";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
+import { encryptTwoFactorSecret, decryptTwoFactorSecret } from "@/lib/auth/two-factor-crypto";
+import { clientIpFromHeaders } from "@/lib/security/client-ip";
 import {
   personalInfoSchema,
   changePasswordSchema,
@@ -40,17 +42,15 @@ async function requireUserId(): Promise<string | null> {
 }
 
 /**
- * Best-effort request metadata for SecurityEvent rows written from Server
- * Actions below — mirrors the `x-forwarded-for`-first, `x-real-ip`-fallback
- * convention already used by `clientIp()` in src/auth.ts. Server Actions
- * have no `Request` object of their own, so this reads the same inbound
- * headers via `next/headers` instead.
+ * Request metadata for SecurityEvent rows written from Server Actions below.
+ * Server Actions have no `Request` object of their own, so this reads the
+ * same inbound headers via `next/headers` that clientIpFromHeaders()
+ * (src/lib/security/client-ip.ts) also uses for Request-based call sites.
  */
 async function requestMeta(): Promise<{ ipAddress: string | null; userAgent: string | null }> {
   const h = await headers();
-  const forwardedFor = h.get("x-forwarded-for");
   return {
-    ipAddress: forwardedFor ? (forwardedFor.split(",")[0]?.trim() ?? null) : h.get("x-real-ip"),
+    ipAddress: clientIpFromHeaders(h),
     userAgent: h.get("user-agent"),
   };
 }
@@ -150,7 +150,7 @@ export async function startTwoFactorEnrollment(): Promise<StartTwoFactorResult> 
     });
     const qrCodeDataUrl = await QRCode.toDataURL(otpauthUrl);
 
-    await prisma.user.update({ where: { id: userId }, data: { twoFactorSecret: secret } });
+    await prisma.user.update({ where: { id: userId }, data: { twoFactorSecret: encryptTwoFactorSecret(secret) } });
 
     return { ok: true, secret, qrCodeDataUrl };
   } catch (error) {
@@ -176,7 +176,8 @@ export async function confirmTwoFactorEnrollment(data: TwoFactorConfirmInput): P
 
     // 30s tolerance each way (one time-step) to absorb clock drift between
     // the user's authenticator app and this server.
-    const result = await verify({ secret: user.twoFactorSecret, token: parsed.data.code, epochTolerance: 30 });
+    const secret = decryptTwoFactorSecret(user.twoFactorSecret);
+    const result = await verify({ secret, token: parsed.data.code, epochTolerance: 30 });
     if (!result.valid) {
       return { ok: false, error: "That code didn't match. Please try again." };
     }
@@ -192,11 +193,31 @@ export async function confirmTwoFactorEnrollment(data: TwoFactorConfirmInput): P
   }
 }
 
-export async function disableTwoFactor(): Promise<ActionResult> {
+/**
+ * Requires the account's current password before disabling 2FA — a
+ * hijacked session (e.g. a stolen but not-yet-expired cookie) must not be
+ * able to silently strip the account's second factor on its own say-so.
+ */
+export async function disableTwoFactor(currentPassword: string): Promise<ActionResult> {
   const userId = await requireUserId();
   if (!userId) return { ok: false, error: "You must be signed in." };
 
   try {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { password: true } });
+    if (!user?.password) return { ok: false, error: "User not found." };
+
+    const matches = currentPassword ? await verifyPassword(currentPassword, user.password) : false;
+    if (!matches) {
+      void logSecurityEvent({
+        userId,
+        type: "TWO_FACTOR_DISABLED",
+        severity: "WARNING",
+        detail: "rejected: incorrect current password",
+        ...(await requestMeta()),
+      });
+      return { ok: false, error: "Current password is incorrect." };
+    }
+
     await prisma.user.update({
       where: { id: userId },
       data: { twoFactorEnabled: false, twoFactorSecret: null },

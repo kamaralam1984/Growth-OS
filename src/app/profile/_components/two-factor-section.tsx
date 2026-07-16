@@ -20,6 +20,8 @@ export function TwoFactorSection({ initialEnabled }: TwoFactorSectionProps) {
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [disabling, setDisabling] = useState(false);
+  const [disablePassword, setDisablePassword] = useState("");
 
   function handleStart() {
     setError(null);
@@ -48,16 +50,19 @@ export function TwoFactorSection({ initialEnabled }: TwoFactorSectionProps) {
     });
   }
 
-  function handleDisable() {
+  function handleDisable(e: React.FormEvent) {
+    e.preventDefault();
     setError(null);
     startTransition(async () => {
-      const result = await disableTwoFactor();
+      const result = await disableTwoFactor(disablePassword);
       if (!result.ok) {
         setError(result.error ?? "Could not disable 2FA.");
         return;
       }
       setEnabled(false);
       setEnrollment(null);
+      setDisabling(false);
+      setDisablePassword("");
     });
   }
 
@@ -73,11 +78,42 @@ export function TwoFactorSection({ initialEnabled }: TwoFactorSectionProps) {
           </p>
         </div>
         {error && <p className="text-sm text-destructive">{error}</p>}
-        <div>
-          <Button type="button" variant="outline" onClick={handleDisable} disabled={pending}>
-            {pending ? "Disabling..." : "Disable 2FA"}
-          </Button>
-        </div>
+        {disabling ? (
+          <form onSubmit={handleDisable} className="flex flex-col gap-3">
+            <FormField label="Confirm your current password" htmlFor="disable-2fa-password" required>
+              <Input
+                id="disable-2fa-password"
+                type="password"
+                value={disablePassword}
+                onChange={(e) => setDisablePassword(e.target.value)}
+                autoComplete="current-password"
+                required
+              />
+            </FormField>
+            <div className="flex gap-3">
+              <Button type="submit" variant="outline" disabled={pending || disablePassword.length === 0}>
+                {pending ? "Disabling..." : "Confirm disable"}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setDisabling(false);
+                  setDisablePassword("");
+                  setError(null);
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <div>
+            <Button type="button" variant="outline" onClick={() => setDisabling(true)} disabled={pending}>
+              Disable 2FA
+            </Button>
+          </div>
+        )}
       </div>
     );
   }

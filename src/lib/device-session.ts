@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { clientIpFromHeaders } from "@/lib/security/client-ip";
 
 /**
  * DeviceSession is populated from two places, by design:
@@ -114,7 +115,6 @@ function extractHeaders(
 }
 
 function extractIp(headers: Headers): string | null {
-  const forwardedFor = headers.get("x-forwarded-for");
-  if (forwardedFor) return forwardedFor.split(",")[0]?.trim() ?? null;
-  return headers.get("x-real-ip");
+  const ip = clientIpFromHeaders(headers);
+  return ip === "unknown" ? null : ip;
 }

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { NextResponse } from "next/server";
 
@@ -8,23 +8,23 @@ import { logActivity } from "@/lib/activity";
 import { logSecurityEvent } from "@/lib/security/security-events";
 import type { DocumentEngineKind } from "@/lib/documents/blueprint";
 
-// Dropbox Sign (HelloSign) event webhook receiver. Verify this payload
-// shape against Dropbox Sign's current event-callback documentation
-// (developers.hellosign.com/docs/event-callbacks) before relying on this in
-// production — written from stable, long-documented conventions (form-
-// encoded `json` field containing an `event` object, HMAC-SHA256 signature
-// over the raw json using the API key as the signing secret, event types
-// `signature_request_signed` / `signature_request_all_signed`) without live
-// doc access in this session.
-function verifySignature(rawJson: string, signatureHeader: string | null): boolean {
-  const apiKey = process.env.DROPBOX_SIGN_CLIENT_SECRET;
+// Dropbox Sign (HelloSign) event webhook receiver. Real, documented scheme
+// (developers.hellosign.com/docs/guides/events-and-callbacks): every event
+// payload's `event.event_hash` is HMAC-SHA256 of `event_time + event_type`
+// (concatenated, no separator), keyed by the receiving account's API key —
+// NOT a plain hash of "apiKey + full JSON body" (an earlier version of this
+// handler used that non-standard, non-HMAC scheme, which would never have
+// matched a real Dropbox Sign callback). Verified with timingSafeEqual.
+function verifySignature(apiKey: string | undefined, eventTime: string | null, eventType: string | null, eventHash: string | null): boolean {
   if (!apiKey) {
     console.error("[webhooks/dropbox-sign] DROPBOX_SIGN_CLIENT_SECRET not set — rejecting payload (integration Not Configured).");
     return false;
   }
-  if (!signatureHeader) return false;
-  const expected = createHash("sha256").update(apiKey + rawJson).digest("hex");
-  return expected === signatureHeader;
+  if (!eventTime || !eventType || !eventHash) return false;
+  const expected = createHmac("sha256", apiKey).update(eventTime + eventType).digest("hex");
+  const expectedBuf = Buffer.from(expected);
+  const actualBuf = Buffer.from(eventHash);
+  return expectedBuf.length === actualBuf.length && timingSafeEqual(expectedBuf, actualBuf);
 }
 
 export async function POST(request: Request) {
@@ -39,8 +39,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON." }, { status: 400 });
   }
 
-  const signatureHeader = extractCallbackSignature(payload);
-  if (!verifySignature(rawJson, signatureHeader)) {
+  const { eventTime, eventHash } = extractCallbackSignatureFields(payload);
+  const { eventType } = extractEvent(payload);
+  if (!verifySignature(process.env.DROPBOX_SIGN_CLIENT_SECRET, eventTime, eventType, eventHash)) {
     console.error("[webhooks/dropbox-sign] signature verification failed — rejecting.");
     void logSecurityEvent({
       type: "WEBHOOK_SIGNATURE_INVALID",
@@ -51,7 +52,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { requestId, eventType } = extractEvent(payload);
+    const { requestId } = extractEvent(payload);
     const isCompleted = eventType === "signature_request_all_signed";
     if (requestId && isCompleted) {
       const record = await prisma.signature.findUnique({ where: { provider_providerEnvelopeId: { provider: "DROPBOX_SIGN", providerEnvelopeId: requestId } } });
@@ -76,11 +77,15 @@ export async function POST(request: Request) {
   return new NextResponse("Hello API Event Received", { status: 200 });
 }
 
-function extractCallbackSignature(payload: unknown): string | null {
-  if (typeof payload !== "object" || payload === null) return null;
+function extractCallbackSignatureFields(payload: unknown): { eventTime: string | null; eventHash: string | null } {
+  if (typeof payload !== "object" || payload === null) return { eventTime: null, eventHash: null };
   const event = (payload as Record<string, unknown>).event as Record<string, unknown> | undefined;
+  const time = event?.event_time;
   const hash = event?.event_hash;
-  return typeof hash === "string" ? hash : null;
+  return {
+    eventTime: typeof time === "string" ? time : null,
+    eventHash: typeof hash === "string" ? hash : null,
+  };
 }
 
 function extractEvent(payload: unknown): { requestId: string | null; eventType: string | null } {

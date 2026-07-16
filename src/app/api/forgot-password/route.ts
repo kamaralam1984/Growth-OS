@@ -6,11 +6,10 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { issueUserToken } from "@/lib/auth/tokens";
 import { sendEmail } from "@/lib/email";
 import { getAppBaseUrl } from "@/lib/outreach/tracking";
+import { clientIpFromHeaders } from "@/lib/security/client-ip";
 
 function clientIp(request: Request): string {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  if (forwardedFor) return forwardedFor.split(",")[0]?.trim() || "unknown";
-  return request.headers.get("x-real-ip") ?? "unknown";
+  return clientIpFromHeaders(request.headers);
 }
 
 // Always returns { ok: true } regardless of whether the email matches a real

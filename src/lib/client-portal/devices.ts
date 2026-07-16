@@ -2,6 +2,7 @@ import { cookies, headers } from "next/headers";
 import { randomUUID } from "node:crypto";
 
 import { prisma } from "@/lib/prisma";
+import { clientIpFromHeaders } from "@/lib/security/client-ip";
 
 export const DEVICE_FINGERPRINT_COOKIE = "kvl_portal_device";
 const DEVICE_COOKIE_MAX_AGE = 60 * 60 * 24 * 365; // 1 year — a stable per-browser identifier, not a session
@@ -46,7 +47,6 @@ export async function upsertClientDevice(clientPortalUserId: string): Promise<{ 
 
 export async function getClientIpAddress(): Promise<string | null> {
   const headerStore = await headers();
-  const forwardedFor = headerStore.get("x-forwarded-for");
-  if (forwardedFor) return forwardedFor.split(",")[0]?.trim() || null;
-  return headerStore.get("x-real-ip");
+  const ip = clientIpFromHeaders(headerStore);
+  return ip === "unknown" ? null : ip;
 }

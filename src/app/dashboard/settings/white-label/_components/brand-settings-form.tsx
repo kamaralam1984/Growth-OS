@@ -81,12 +81,12 @@ export function BrandSettingsForm({ canManage, initial }: BrandSettingsFormProps
             <Input id="wl-brand-name" name="brandName" defaultValue={initial.brandName} maxLength={120} placeholder="Acme Growth" disabled={!canManage} />
           </FormField>
 
-          <FormField label="Logo" htmlFor="wl-logo-file" hint="PNG, JPEG, WebP, GIF, or SVG — up to 2MB.">
+          <FormField label="Logo" htmlFor="wl-logo-file" hint="PNG, JPEG, WebP, or GIF — up to 2MB.">
             <Input
               id="wl-logo-file"
               name="logoFile"
               type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+              accept="image/png,image/jpeg,image/webp,image/gif"
               disabled={!canManage}
               onChange={(e) => handleFileChange("logo", e.target.files?.[0] ?? null)}
             />
@@ -100,12 +100,12 @@ export function BrandSettingsForm({ canManage, initial }: BrandSettingsFormProps
             )}
           </FormField>
 
-          <FormField label="Favicon" htmlFor="wl-favicon-file" hint="PNG, ICO, or SVG — up to 512KB.">
+          <FormField label="Favicon" htmlFor="wl-favicon-file" hint="PNG or ICO — up to 512KB.">
             <Input
               id="wl-favicon-file"
               name="faviconFile"
               type="file"
-              accept="image/png,image/x-icon,image/vnd.microsoft.icon,image/svg+xml"
+              accept="image/png,image/x-icon,image/vnd.microsoft.icon"
               disabled={!canManage}
               onChange={(e) => handleFileChange("favicon", e.target.files?.[0] ?? null)}
             />

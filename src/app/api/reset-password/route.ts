@@ -5,12 +5,12 @@ import { resetPasswordSchema } from "@/lib/validations/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { consumeUserToken } from "@/lib/auth/tokens";
 import { logAudit } from "@/lib/audit";
+import { logSecurityEvent } from "@/lib/security/security-events";
 import { hashPassword } from "@/lib/auth/password";
+import { clientIpFromHeaders } from "@/lib/security/client-ip";
 
 function clientIp(request: Request): string {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  if (forwardedFor) return forwardedFor.split(",")[0]?.trim() || "unknown";
-  return request.headers.get("x-real-ip") ?? "unknown";
+  return clientIpFromHeaders(request.headers);
 }
 
 export async function POST(request: Request) {
@@ -34,14 +34,31 @@ export async function POST(request: Request) {
   }
 
   const hashed = await hashPassword(parsed.data.password);
-  await prisma.user.update({
-    where: { id: result.userId },
-    // Clear any active lockout too — a successful reset is proof of
-    // ownership, so there's no reason to keep the account locked.
-    data: { password: hashed, failedLoginAttempts: 0, lockedUntil: null },
-  });
+  await prisma.$transaction([
+    prisma.user.update({
+      where: { id: result.userId },
+      // Clear any active lockout too — a successful reset is proof of
+      // ownership, so there's no reason to keep the account locked. Also
+      // bump sessionInvalidatedAt: a password reset (e.g. after a phishing
+      // incident) must terminate every already-issued JWT, not just stop
+      // new sign-ins with the old password — see src/auth.ts's jwt()
+      // callback, which is what actually enforces this for stateless
+      // sessions. Also mirrors signOutAllDevices (src/app/profile/actions.ts).
+      data: { password: hashed, failedLoginAttempts: 0, lockedUntil: null, sessionInvalidatedAt: new Date() },
+    }),
+    prisma.deviceSession.deleteMany({ where: { userId: result.userId } }),
+    prisma.session.deleteMany({ where: { userId: result.userId } }),
+  ]);
 
   await logAudit({ userId: result.userId, action: "PASSWORD_RESET", metadata: { via: "forgot-password" } });
+  void logSecurityEvent({
+    userId: result.userId,
+    type: "PASSWORD_CHANGED",
+    severity: "INFO",
+    detail: "reset via forgot-password link; all other sessions revoked",
+    ipAddress: clientIp(request),
+    userAgent: request.headers.get("user-agent"),
+  });
 
   return NextResponse.json({ ok: true });
 }

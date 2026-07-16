@@ -28,6 +28,7 @@ import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
 import { verifyPassword } from "@/lib/auth/password";
 import { collectUserDataExport } from "@/lib/dsr/export-user-data";
+import { clientIpFromHeaders } from "@/lib/security/client-ip";
 
 export interface ActionResult {
   ok: boolean;
@@ -46,9 +47,8 @@ async function requireUserId(): Promise<string | null> {
 
 async function requestMeta(): Promise<{ ipAddress: string | null; userAgent: string | null }> {
   const h = await headers();
-  const forwardedFor = h.get("x-forwarded-for");
   return {
-    ipAddress: forwardedFor ? (forwardedFor.split(",")[0]?.trim() ?? null) : h.get("x-real-ip"),
+    ipAddress: clientIpFromHeaders(h),
     userAgent: h.get("user-agent"),
   };
 }

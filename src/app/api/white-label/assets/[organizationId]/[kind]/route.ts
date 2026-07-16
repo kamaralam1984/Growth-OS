@@ -4,12 +4,14 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { readWhiteLabelAsset } from "@/lib/storage/white-label-assets";
 
+// Raster-only, deliberately no image/svg+xml — see
+// src/lib/white-label/settings.ts's ALLOWED_IMAGE_EXTENSION_BY_TYPE doc
+// comment for why SVG is rejected at upload time.
 const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
   webp: "image/webp",
-  svg: "image/svg+xml",
   gif: "image/gif",
   ico: "image/x-icon",
 };

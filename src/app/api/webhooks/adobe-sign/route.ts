@@ -6,22 +6,42 @@ import { logActivity } from "@/lib/activity";
 import { logSecurityEvent } from "@/lib/security/security-events";
 import type { DocumentEngineKind } from "@/lib/documents/blueprint";
 
-// Adobe Acrobat Sign webhook receiver. Verify this payload shape against
-// Adobe's current webhook documentation
-// (developer.adobe.com/document-services/docs/acrobat-sign/) before relying
-// on this in production — written from stable, long-documented Adobe Sign
-// webhook conventions (x-adobesign-clientid header echo-back for
-// verification, event.agreement.id, "AGREEMENT_ACTION_COMPLETED" /
-// "AGREEMENT_WORKFLOW_COMPLETED" event types) without live doc access in
-// this session.
+// Adobe Acrobat Sign webhook receiver. This IS Adobe's real, documented
+// verification mechanism (helpx.adobe.com/sign/developer/webhook/overview.html) —
+// Acrobat Sign has no separate HMAC-signed-webhook option for this product;
+// every notification carries an `X-AdobeSign-ClientId` header set to the
+// client ID (Application ID) of the app that registered the webhook, and
+// registration itself requires this endpoint to answer a verification
+// handshake (see the GET handler below). It's weaker than a true shared
+// secret — a client ID isn't meant to be secret the way an HMAC key is —
+// but implementing it correctly (fail-closed, real handshake) is Adobe's
+// actual security model for this product, not a stand-in for one.
 function verifyClientId(request: Request): boolean {
   const expected = process.env.ADOBE_SIGN_CLIENT_ID;
   if (!expected) {
-    console.warn("[webhooks/adobe-sign] ADOBE_SIGN_CLIENT_ID not set — cannot verify webhook client id header.");
-    return true;
+    console.error("[webhooks/adobe-sign] ADOBE_SIGN_CLIENT_ID not set — rejecting payload (integration Not Configured).");
+    return false;
   }
   const header = request.headers.get("x-adobesign-clientid");
   return header === expected;
+}
+
+// Webhook registration handshake: when a webhook is created/verified in
+// Acrobat Sign, it sends a GET request to this URL carrying
+// `X-AdobeSign-ClientId`, and expects a 2XX response that echoes the same
+// client ID back — either as a response header or as JSON
+// `{ xAdobeSignClientId: "..." }`. Without this, registering a real
+// webhook against this endpoint would never succeed.
+export async function GET(request: Request) {
+  const expected = process.env.ADOBE_SIGN_CLIENT_ID;
+  const header = request.headers.get("x-adobesign-clientid");
+  if (!expected || header !== expected) {
+    return NextResponse.json({ error: "Client id mismatch or ADOBE_SIGN_CLIENT_ID not configured." }, { status: 401 });
+  }
+  return NextResponse.json(
+    { xAdobeSignClientId: expected },
+    { status: 200, headers: { "X-AdobeSign-ClientId": expected } },
+  );
 }
 
 export async function POST(request: Request) {

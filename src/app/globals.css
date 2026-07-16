@@ -207,6 +207,22 @@
     border: 1px solid var(--glass-border);
     backdrop-filter: blur(var(--glass-blur)) saturate(140%);
     -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+    /* Dark theme's --muted-foreground (neutral-400) is tuned for the flatter
+       --card/--popover surfaces — against this panel's actual blend (~6%
+       white over the near-black page background, effectively still close to
+       black) it measures ~2.6:1, well under WCAG AA's 4.5:1 for normal text
+       (caught by e2e/login.spec.ts's real axe scan on the cookie-consent
+       banner, which uses this class). Boost it specifically inside glass
+       panels; light theme's own --muted-foreground already has enough
+       contrast against its much lighter (60% white) glass blend, so it's
+       reset back to its normal value below rather than also boosted.
+       Affects every text-muted-foreground element nested in a glass panel
+       app-wide, not just the one place this was first caught. */
+    --muted-foreground: var(--color-neutral-300);
+  }
+
+  :root[data-theme="light"] .glass-panel {
+    --muted-foreground: var(--color-neutral-600);
   }
 
   .glass-panel-strong {
@@ -214,6 +230,11 @@
     border: 1px solid var(--glass-border);
     backdrop-filter: blur(var(--glass-blur)) saturate(160%);
     -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%);
+    --muted-foreground: var(--color-neutral-300);
+  }
+
+  :root[data-theme="light"] .glass-panel-strong {
+    --muted-foreground: var(--color-neutral-600);
   }
 
   .text-gradient-brand {

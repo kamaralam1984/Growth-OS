@@ -16,8 +16,8 @@ import { logActivity } from "@/lib/activity";
 function verifySignature(rawBody: string, headers: Headers): boolean {
   const secret = process.env.RESEND_WEBHOOK_SECRET;
   if (!secret) {
-    console.warn("[webhooks/resend] RESEND_WEBHOOK_SECRET not set — accepting payload WITHOUT signature verification.");
-    return true;
+    console.error("[webhooks/resend] RESEND_WEBHOOK_SECRET not set — rejecting payload (integration Not Configured).");
+    return false;
   }
   const svixId = headers.get("svix-id");
   const svixTimestamp = headers.get("svix-timestamp");

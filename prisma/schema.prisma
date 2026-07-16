@@ -4581,6 +4581,11 @@ model ClientPortalUser {
   // Null until the client opts in from Security Settings — magic link is
   // the always-available default, password is additive.
   passwordHash    String?
+  // Persistent password-login lockout — same mechanism as User.failedLoginAttempts
+  // / User.lockedUntil in src/auth.ts, so loginWithPassword() gets real
+  // brute-force protection instead of none.
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
   // Stamped the first time a LOGIN magic link is successfully consumed —
   // clicking a real emailed link IS proof of ownership.
   emailVerifiedAt DateTime?

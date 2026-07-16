@@ -13,6 +13,12 @@
 # testing
 /coverage
 /test-results
+/playwright-report
+
+# real session storageState minted by e2e/global-setup.ts against a real
+# local/CI Postgres — never a fixture worth committing, and would leak a
+# live session cookie if it were.
+/e2e/.auth
 
 # next.js
 /.next/
