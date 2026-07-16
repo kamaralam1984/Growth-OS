@@ -23,12 +23,12 @@ services:
       # conflict or silently shadow the wrong instance. Container-to-
       # container traffic on the compose network doesn't need host
       # publishing regardless.
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your .env file, e.g. via: openssl rand -hex 24}@postgres:5432/kvl_growthos?schema=public
+      DATABASE_URL: "postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your .env file, e.g. openssl rand -hex 24}@postgres:5432/kvl_growthos?schema=public"
       REDIS_URL: redis://redis:6379
       NODE_ENV: production
       # Generate a real secret for local/self-hosted use:
       #   openssl rand -base64 32
-      AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET in your .env file, e.g. via: openssl rand -base64 32}
+      AUTH_SECRET: "${AUTH_SECRET:?set AUTH_SECRET in your .env file, e.g. openssl rand -base64 32}"
       # Real public URL of this deployment — required so Auth.js generates
       # correct callback/redirect URLs when running behind the host's nginx
       # instead of being accessed directly. Leave unset for plain localhost
@@ -81,7 +81,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your .env file, e.g. via: openssl rand -hex 24}
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your .env file, e.g. openssl rand -hex 24}"
       POSTGRES_DB: kvl_growthos
     # Loopback-only, on a free host port set via POSTGRES_HOST_PORT — this
     # host's own native Postgres already owns 5432, so this must be a
