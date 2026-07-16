@@ -75,6 +75,15 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # copied in explicitly, not just relied on the standalone trace.
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/pdfkit ./node_modules/pdfkit
 
+# Real uploaded-document storage (docker-compose.yml mounts a named volume
+# at /app/storage/documents). Docker only inherits ownership/permissions
+# from the image into a NEW named volume on its first mount — if this
+# directory doesn't already exist with the right owner before that first
+# mount, Docker auto-creates it as root:root, and the non-root `nextjs`
+# process below can never write to it (a real functional bug, not just a
+# health-check cosmetic one — document uploads would silently fail).
+RUN mkdir -p /app/storage/documents && chown -R nextjs:nodejs /app/storage
+
 USER nextjs
 
 EXPOSE 3000

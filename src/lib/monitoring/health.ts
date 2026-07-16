@@ -70,17 +70,29 @@ export async function checkRedisHealth(): Promise<ComponentHealth> {
  * call site already checks (isAIConnected), which is genuinely accurate
  * for "will an AI call succeed," just not a full round-trip probe.
  */
+/**
+ * "Not configured" is DEGRADED, not DOWN — these are optional integrations
+ * this app has always honestly supported running without (see
+ * isAIConnected()'s own doc comment, and every AI call site's "AI not
+ * connected" state — never treated as an outage anywhere else in this
+ * codebase). worstStatus() below rolls any DOWN component into the public
+ * /api/health endpoint's overall status, which returns HTTP 503 — using
+ * DOWN here would mean any deployment that simply hasn't configured every
+ * optional integration reports itself completely down, forever, which is
+ * wrong: the app is fully operational, just missing an optional feature.
+ * DOWN is reserved for a real, live check that actually failed.
+ */
 export async function checkAIProviderHealth(): Promise<ComponentHealth> {
   return isAIConnected()
     ? { component: "AI_PROVIDER", status: "HEALTHY", detail: "ANTHROPIC_API_KEY configured" }
-    : { component: "AI_PROVIDER", status: "DOWN", detail: "Not Configured — ANTHROPIC_API_KEY is not set" };
+    : { component: "AI_PROVIDER", status: "DEGRADED", detail: "Not Configured — ANTHROPIC_API_KEY is not set" };
 }
 
 export async function checkPaymentGatewayHealth(): Promise<ComponentHealth> {
   const configured = listConfiguredGateways().filter((g) => g.provider !== "MANUAL");
   return configured.length > 0
     ? { component: "PAYMENT_GATEWAY", status: "HEALTHY", detail: `${configured.length} gateway(s) configured: ${configured.map((g) => g.name).join(", ")}` }
-    : { component: "PAYMENT_GATEWAY", status: "DOWN", detail: "Not Configured — no payment gateway credentials are set (Bank Transfer/Manual is always available)" };
+    : { component: "PAYMENT_GATEWAY", status: "DEGRADED", detail: "Not Configured — no payment gateway credentials are set (Bank Transfer/Manual is always available)" };
 }
 
 export async function checkStorageHealth(): Promise<ComponentHealth> {
