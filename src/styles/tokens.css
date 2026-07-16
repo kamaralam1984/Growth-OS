@@ -114,3 +114,23 @@
   --glass-bg-strong: color-mix(in srgb, white 78%, transparent);
   --glass-border: color-mix(in srgb, black 8%, transparent);
 }
+
+/* ================= Public marketing homepage accent override =================
+   Deep rose-red + gold, in place of the emerald used everywhere else in the
+   product. Scoped to `.theme-luxury` (wraps only src/app/page.tsx — see that
+   file) so it never touches the authenticated app: /dashboard, /board,
+   /portal all keep --primary as emerald, where green also carries real
+   "healthy / connected / success" status meaning a red accent would clash
+   with. Every existing component already themes off --primary/--ring
+   (Button, Badge, .bg-aurora, Spotlight, focus rings — see globals.css) so
+   overriding just these tokens re-colors the whole page for free.
+   Deliberately declared here, unlayered (same as the :root/data-theme
+   blocks above), NOT inside globals.css's `@layer components` — Tailwind
+   v4's cascade layers mean ANY layered rule loses to this file's unlayered
+   :root regardless of selector specificity, so a `.theme-luxury` class
+   living inside `@layer components` could never actually override --primary. */
+.theme-luxury {
+  --primary: var(--color-rose-500);
+  --primary-foreground: var(--color-neutral-975);
+  --ring: var(--color-rose-500);
+}

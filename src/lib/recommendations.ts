@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 
 import { prisma } from "@/lib/prisma";
-import { AGENT_MODEL, AINotConnectedError, getAnthropicClient, isAIConnected } from "@/lib/ai/client";
+import { AINotConnectedError, isAIConnected } from "@/lib/ai/client";
+import { generateStructured } from "@/lib/ai/fallback";
 import { getPersona } from "@/lib/ai/personas";
 import type { Recommendation } from "@/generated/prisma/client";
 
@@ -130,11 +130,11 @@ async function buildRecommendationDataSummary(organizationId: string): Promise<{
 
 /**
  * Generates the Lead Finder / Companies "AI Recommendations" panel with ONE
- * real Claude call, grounded strictly in real stored Company/LeadScore/Lead/
- * CompanyTimelineEvent data — mirrors insights-generator.ts's
- * generateExecutiveInsights pattern exactly (client.messages.parse +
- * zodOutputFormat, no web_search tool, pure reasoning over provided data).
- * relatedCompanyId is never taken from the model directly (to avoid a
+ * real AI call (via the fallback chain, src/lib/ai/fallback.ts), grounded
+ * strictly in real stored Company/LeadScore/Lead/CompanyTimelineEvent data —
+ * mirrors insights-generator.ts's generateExecutiveInsights pattern exactly
+ * (generateStructured, no web_search tool, pure reasoning over provided
+ * data). relatedCompanyId is never taken from the model directly (to avoid a
  * fabricated id) — it's resolved after parsing by matching the model's
  * relatedCompanyName against the real companyRefs list built above.
  */
@@ -142,7 +142,6 @@ export async function generateRecommendations(organizationId: string): Promise<R
   if (!isAIConnected()) throw new AINotConnectedError();
 
   const persona = getPersona("SALES");
-  const client = getAnthropicClient();
   const salesAgent = await prisma.aIAgentInstance.findFirst({ where: { organizationId, type: "SALES" } });
   const { summary, companyRefs } = await buildRecommendationDataSummary(organizationId);
   const nameToId = new Map(companyRefs.map((c) => [c.name.toLowerCase(), c.id]));
@@ -155,33 +154,20 @@ export async function generateRecommendations(organizationId: string): Promise<R
   }
 
   try {
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 2048,
-      thinking: { type: "adaptive" },
-      output_config: {
-        effort: "medium",
-        format: zodOutputFormat(RecommendationsResponseSchema),
-      },
+    const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYou are generating the AI Recommendations panel for Lead Finder / Companies. You must produce exactly one recommendation for EACH of these categories: ${RECOMMENDATION_TYPES.join(", ")}. Ground every recommendation strictly in the real company/lead data given to you below — never invent a company, score, or number that isn't in that data. When a recommendation is about a specific company, set relatedCompanyName to its EXACT name from the Company reference list. If a category genuinely has no real signal yet (e.g. no companies are scored yet), say that honestly as the recommendation itself rather than fabricating one.`,
-      messages: [
-        {
-          role: "user",
-          content: `Here is the real, current state of the company's leads and companies:\n\n${summary}\n\nGenerate the ${RECOMMENDATION_TYPES.length} required recommendations now.`,
-        },
-      ],
+      userContent: `Here is the real, current state of the company's leads and companies:\n\n${summary}\n\nGenerate the ${RECOMMENDATION_TYPES.length} required recommendations now.`,
+      maxTokens: 2048,
+      effort: "medium",
+      schema: RecommendationsResponseSchema,
     });
 
     if (salesAgent) {
       await prisma.aIAgentInstance.update({ where: { id: salesAgent.id }, data: { status: "COMPLETED" } });
     }
 
-    if (!response.parsed_output) {
-      throw new Error("Recommendation response failed schema validation.");
-    }
-
     const created = await prisma.$transaction(
-      response.parsed_output.recommendations.map((rec) =>
+      result.parsed.recommendations.map((rec) =>
         prisma.recommendation.create({
           data: {
             organizationId,

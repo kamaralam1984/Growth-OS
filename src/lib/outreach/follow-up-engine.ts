@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 
 import { prisma } from "@/lib/prisma";
-import { AGENT_MODEL, AINotConnectedError, getAnthropicClient, isAIConnected } from "@/lib/ai/client";
+import { AINotConnectedError, isAIConnected } from "@/lib/ai/client";
+import { generateStructured } from "@/lib/ai/fallback";
 import { getPersona } from "@/lib/ai/personas";
 
 const FollowUpResponseSchema = z.object({
@@ -62,7 +62,6 @@ export async function suggestFollowUp(contactId: string): Promise<FollowUpSugges
   ];
 
   const persona = getPersona("OUTREACH");
-  const client = getAnthropicClient();
   const outreachAgent = await prisma.aIAgentInstance.findFirst({ where: { organizationId: contact.organizationId, type: "OUTREACH" } });
 
   if (outreachAgent) {
@@ -70,30 +69,23 @@ export async function suggestFollowUp(contactId: string): Promise<FollowUpSugges
   }
 
   try {
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 800,
-      thinking: { type: "adaptive" },
-      output_config: { effort: "low", format: zodOutputFormat(FollowUpResponseSchema) },
+    const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYou're deciding what to do next with a real prospect based on their real outreach history below. If there's no history yet, say the honest next step is simply the first outreach. Never invent a reply or open event that isn't in the data.`,
-      messages: [
-        {
-          role: "user",
-          content:
-            historyLines.length > 0
-              ? `Real outreach history for ${contact.firstName} ${contact.lastName ?? ""}:\n${historyLines.join("\n")}\n\nSuggest the follow-up plan.`
-              : `No outreach history exists yet for ${contact.firstName} ${contact.lastName ?? ""}. Suggest the honest first step.`,
-        },
-      ],
+      userContent:
+        historyLines.length > 0
+          ? `Real outreach history for ${contact.firstName} ${contact.lastName ?? ""}:\n${historyLines.join("\n")}\n\nSuggest the follow-up plan.`
+          : `No outreach history exists yet for ${contact.firstName} ${contact.lastName ?? ""}. Suggest the honest first step.`,
+      maxTokens: 800,
+      effort: "low",
+      schema: FollowUpResponseSchema,
     });
 
     if (outreachAgent) {
       await prisma.aIAgentInstance.update({ where: { id: outreachAgent.id }, data: { status: "COMPLETED" } });
     }
-    if (!response.parsed_output) throw new Error("Follow-up suggestion failed schema validation.");
 
     return {
-      ...response.parsed_output,
+      ...result.parsed,
       bestFollowUpTime: bestFollowUpTime.text,
       bestFollowUpTimeIsReal: bestFollowUpTime.isReal,
     };

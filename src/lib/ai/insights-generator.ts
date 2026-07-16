@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 
 import { prisma } from "@/lib/prisma";
 import { computePipelineTotals } from "@/lib/company-health";
-import { AGENT_MODEL, AINotConnectedError, getAnthropicClient, isAIConnected } from "@/lib/ai/client";
+import { AINotConnectedError, isAIConnected } from "@/lib/ai/client";
+import { generateStructured } from "@/lib/ai/fallback";
 import { getPersona } from "@/lib/ai/personas";
 import type { Insight } from "@/generated/prisma/client";
 
@@ -86,27 +86,28 @@ async function buildDataSummary(organizationId: string): Promise<string> {
 }
 
 /**
- * Generates the Command Center's "Executive Insights" panel with ONE real
- * Claude call and stores the result as Insight rows.
+ * Generates the Command Center's "Executive Insights" panel with ONE real AI
+ * call (through the fallback chain, src/lib/ai/fallback.ts) and stores the
+ * result as Insight rows.
  *
  * Implementation choice (documented per the brief): this calls
- * `client.messages.parse` directly with the CEO persona's system prompt
- * (from personas.ts) rather than going through `runAgentTurn`, because
+ * `generateStructured` directly with the CEO persona's system prompt (from
+ * personas.ts) rather than going through `runAgentTurn`, because
  * runAgentTurn only returns free-text `content` — it has no structured
  * multi-item output mode. A strict zod schema requesting exactly one insight
  * per InsightType is needed here, so this mirrors the same
- * `zodOutputFormat` + `client.messages.parse` pattern `runAgentVote` already
- * uses in agent-runtime.ts, just with a richer schema. If the organization
- * has a real CEO AIAgentInstance, its live status is set to
+ * `generateStructured` pattern `runAgentVote` already uses in
+ * agent-runtime.ts, just with a richer schema. If the organization has a
+ * real CEO AIAgentInstance, its live status is set to
  * ANALYZING/COMPLETED/IDLE around the call (same as agent-runtime.ts does)
  * so the Executive Board UI reflects the work; if no CEO agent instance
  * exists yet, the call still proceeds using the CEO persona's system prompt
  * alone.
  *
- * Throws AINotConnectedError if no API key is configured. On a billing
- * failure, throws the raw Anthropic error un-wrapped — exactly like
- * runAgentTurn/runAgentVote do — so callers must check both
- * `error instanceof AINotConnectedError` and `isAIBillingError(error)`
+ * Throws AINotConnectedError if no provider at all is configured. If every
+ * configured provider in the chain fails, throws AllAIProvidersFailedError
+ * un-wrapped — callers must check both `error instanceof AINotConnectedError`
+ * and (for the legacy Anthropic-only-billing case) `isAIBillingError(error)`
  * themselves (see src/app/board/tasks/actions.ts's `describeAIError` for the
  * established pattern). Never falls back to fabricated insights on failure.
  */
@@ -114,7 +115,6 @@ export async function generateExecutiveInsights(organizationId: string): Promise
   if (!isAIConnected()) throw new AINotConnectedError();
 
   const persona = getPersona("CEO");
-  const client = getAnthropicClient();
   const ceoAgent = await prisma.aIAgentInstance.findFirst({ where: { organizationId, type: "CEO" } });
   const dataSummary = await buildDataSummary(organizationId);
 
@@ -126,33 +126,20 @@ export async function generateExecutiveInsights(organizationId: string): Promise
   }
 
   try {
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 2048,
-      thinking: { type: "adaptive" },
-      output_config: {
-        effort: "medium",
-        format: zodOutputFormat(InsightsResponseSchema),
-      },
+    const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYou are generating the Executive Insights panel on the Command Center dashboard. You must produce exactly one insight for EACH of these categories: ${INSIGHT_TYPES.join(", ")}. Ground every single insight strictly in the real company data given to you below — never invent a lead, a number, a deal, or an event that isn't in that data. If a category genuinely has no real signal to point to yet (for example: there is no top opportunity because there are no leads with value recorded yet), say that honestly as the insight itself rather than fabricating one.`,
-      messages: [
-        {
-          role: "user",
-          content: `Here is the real, current state of the company:\n\n${dataSummary}\n\nGenerate the 7 required insights now.`,
-        },
-      ],
+      userContent: `Here is the real, current state of the company:\n\n${dataSummary}\n\nGenerate the 7 required insights now.`,
+      maxTokens: 2048,
+      effort: "medium",
+      schema: InsightsResponseSchema,
     });
 
     if (ceoAgent) {
       await prisma.aIAgentInstance.update({ where: { id: ceoAgent.id }, data: { status: "COMPLETED" } });
     }
 
-    if (!response.parsed_output) {
-      throw new Error("Insight response failed schema validation.");
-    }
-
     const created = await prisma.$transaction(
-      response.parsed_output.insights.map((insight) =>
+      result.parsed.insights.map((insight) =>
         prisma.insight.create({
           data: {
             organizationId,

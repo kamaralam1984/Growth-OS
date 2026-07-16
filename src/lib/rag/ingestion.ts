@@ -2,7 +2,8 @@ import * as cheerio from "cheerio";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
 
-import { getAnthropicClient, isAIConnected, AINotConnectedError, AGENT_MODEL } from "@/lib/ai/client";
+import { isAIConnected, AINotConnectedError } from "@/lib/ai/client";
+import { generateText } from "@/lib/ai/fallback";
 
 /**
  * Real document-text extraction for the Document Ingestion pipeline —
@@ -86,25 +87,24 @@ function extractHtml(buffer: Buffer): string {
   return $("body").text().replace(/\n{3,}/g, "\n\n").trim();
 }
 
-/** Real OCR/description extraction via Claude vision — throws AINotConnectedError honestly if AI isn't connected, never fabricates extracted text. */
+/**
+ * Real OCR/description extraction via vision — throws AINotConnectedError
+ * honestly if AI isn't connected, never fabricates extracted text. Goes
+ * through the fallback chain (src/lib/ai/fallback.ts), but only Anthropic
+ * and Gemini actually support vision — Groq/OpenRouter throw immediately on
+ * an image request (see providers/openai-compatible.ts) so the chain skips
+ * straight past them instead of hallucinating a transcription.
+ */
 async function extractImageText(buffer: Buffer, mimeType: string): Promise<string> {
   if (!isAIConnected()) throw new AINotConnectedError();
-  const client = getAnthropicClient();
-  const response = await client.messages.create({
-    model: AGENT_MODEL,
-    max_tokens: 2048,
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "image", source: { type: "base64", media_type: mimeType as "image/png" | "image/jpeg" | "image/webp" | "image/gif", data: buffer.toString("base64") } },
-          { type: "text", text: "Transcribe every piece of readable text in this image verbatim, preserving structure (headings, lists, tables) as plain text/markdown. If there is no readable text, briefly describe the image's content instead. Do not add commentary before or after." },
-        ],
-      },
-    ],
+  const result = await generateText({
+    system: "",
+    userContent:
+      "Transcribe every piece of readable text in this image verbatim, preserving structure (headings, lists, tables) as plain text/markdown. If there is no readable text, briefly describe the image's content instead. Do not add commentary before or after.",
+    maxTokens: 2048,
+    image: { mediaType: mimeType as "image/png" | "image/jpeg" | "image/webp" | "image/gif", base64: buffer.toString("base64") },
   });
-  const textBlock = response.content.find((b) => b.type === "text");
-  return textBlock && textBlock.type === "text" ? textBlock.text : "";
+  return result.text;
 }
 
 // Zip-bomb guard: JSZip decompresses each entry fully into memory

@@ -21,6 +21,10 @@ const CREDIT_COST_PER_1K_TOKENS: Record<AIUsageProvider, number> = {
   OPENAI: 0.6,
   GOOGLE_GEMINI: 0.5,
   GROQ: 0.2,
+  // OpenRouter's free-tier (":free") models used by the AI runtime fallback
+  // chain carry no real per-token cost, but a small nonzero weight still
+  // meters usage volume against the org's credit ledger.
+  OPENROUTER: 0.1,
   EMBEDDING: 0.05,
 };
 

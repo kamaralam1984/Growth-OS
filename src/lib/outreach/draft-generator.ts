@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 
 import { prisma } from "@/lib/prisma";
-import { AGENT_MODEL, AINotConnectedError, getAnthropicClient, isAIConnected } from "@/lib/ai/client";
+import { AINotConnectedError, isAIConnected } from "@/lib/ai/client";
+import { generateStructured } from "@/lib/ai/fallback";
 import { getPersona } from "@/lib/ai/personas";
 import { buildContactContext } from "./personalization";
 import type { DraftChannel, DraftPurpose, EmailTone, EmailDraft } from "@/generated/prisma/client";
@@ -64,7 +64,6 @@ export async function generateEmailDraft(params: GenerateDraftParams): Promise<E
 
   const contact = await prisma.contact.findUniqueOrThrow({ where: { id: params.contactId } });
   const persona = getPersona("OUTREACH");
-  const client = getAnthropicClient();
   const outreachAgent = await prisma.aIAgentInstance.findFirst({ where: { organizationId: contact.organizationId, type: "OUTREACH" } });
   const context = await buildContactContext(params.contactId);
 
@@ -81,24 +80,19 @@ export async function generateEmailDraft(params: GenerateDraftParams): Promise<E
       : "This is a real cold email. Include a short, specific subject line (never generic like 'Quick question').";
 
   try {
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 1500,
-      thinking: { type: "adaptive" },
-      output_config: { effort: "low", format: zodOutputFormat(DraftResponseSchema) },
+    const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nWrite ${PURPOSE_LABEL[params.purpose]}, in a ${TONE_LABEL[params.tone]} tone. ${channelInstructions} Only reference facts present in the context below — if there's no real researched pain point or tech-stack detail, write a genuinely short, honest, generic-but-still-personal intro rather than inventing a fact. List in personalizationNotes exactly which real facts you actually used (e.g. "mentioned their industry", "referenced a real researched pain point") — if you used none, return an empty array, never a fabricated note.`,
-      messages: [{ role: "user", content: `Real context about this contact:\n\n${context}\n\nWrite the ${params.channel === "LINKEDIN" ? "LinkedIn message" : "email"} now.` }],
+      userContent: `Real context about this contact:\n\n${context}\n\nWrite the ${params.channel === "LINKEDIN" ? "LinkedIn message" : "email"} now.`,
+      maxTokens: 1500,
+      effort: "low",
+      schema: DraftResponseSchema,
     });
 
     if (outreachAgent) {
       await prisma.aIAgentInstance.update({ where: { id: outreachAgent.id }, data: { status: "COMPLETED" } });
     }
 
-    if (!response.parsed_output) {
-      throw new Error("Draft response failed schema validation.");
-    }
-
-    const parsed = response.parsed_output;
+    const parsed = result.parsed;
     const draft = await prisma.emailDraft.create({
       data: {
         organizationId: contact.organizationId,

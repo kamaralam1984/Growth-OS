@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 
 import { prisma } from "@/lib/prisma";
-import { AGENT_MODEL, AINotConnectedError, getAnthropicClient, isAIConnected } from "@/lib/ai/client";
+import { AINotConnectedError, isAIConnected } from "@/lib/ai/client";
+import { generateStructured, generateText } from "@/lib/ai/fallback";
 import { decryptMemory, encryptMemory } from "@/lib/ai/encryption";
 import { getPersona, type ExecutiveAgentType } from "@/lib/ai/personas";
 import { logMemoryEvent } from "@/lib/ai/memory-events";
@@ -10,21 +10,30 @@ import { publishRealtimeEvent } from "@/lib/realtime/event-bus";
 import { enqueueSourceEmbedding } from "@/lib/rag/embedding-queue";
 import { buildAgentContext } from "@/lib/context-engine";
 import { recordAIUsage } from "@/lib/billing/ai-credits";
-import type { MemorySourceKind, MemoryType } from "@/generated/prisma/client";
+import type { AIUsageProvider, MemorySourceKind, MemoryType } from "@/generated/prisma/client";
 
 /**
  * Real per-call AI usage metering (Phase 19's AI Credit System) — looks up
- * the calling agent's real organizationId and records the real token
- * counts every Claude response already reports (previously computed here
- * and silently discarded by every caller). Fire-and-forget: a metering
+ * the calling agent's real organizationId and records the real token counts
+ * every provider response already reports (previously computed here and
+ * silently discarded by every caller). `provider`/`model` identify whichever
+ * provider in the fallback chain (src/lib/ai/fallback.ts) actually served
+ * this call — not always Anthropic anymore. Fire-and-forget: a metering
  * failure must never fail the AI call it's recording, since the call has
  * already completed by the time this runs.
  */
-async function recordAgentAIUsage(agentId: string, inputTokens: number, outputTokens: number, context: string): Promise<void> {
+async function recordAgentAIUsage(
+  agentId: string,
+  provider: AIUsageProvider,
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+  context: string,
+): Promise<void> {
   try {
     const agent = await prisma.aIAgentInstance.findUnique({ where: { id: agentId }, select: { organizationId: true } });
     if (!agent) return;
-    await recordAIUsage(agent.organizationId, "ANTHROPIC", AGENT_MODEL, inputTokens, outputTokens, context);
+    await recordAIUsage(agent.organizationId, provider, model, inputTokens, outputTokens, context);
   } catch (error) {
     console.error("[agent-runtime] recordAgentAIUsage failed:", error);
   }
@@ -314,7 +323,6 @@ export async function runAgentTurn(params: {
   if (!isAIConnected()) throw new AINotConnectedError();
 
   const persona = getPersona(params.agentType);
-  const client = getAnthropicClient();
 
   await setAgentStatus(params.agentId, "THINKING", params.task);
 
@@ -327,38 +335,37 @@ export async function runAgentTurn(params: {
         })
       : "";
 
-    const response = await client.messages.create({
-      model: AGENT_MODEL,
-      max_tokens: 2048,
-      thinking: { type: "adaptive" },
-      output_config: { effort: params.effort ?? "medium" },
-      system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}".`,
-      messages: [
-        {
-          role: "user",
-          content: [
-            memoryContext,
-            engineContext || null,
-            params.conversationContext ? `Conversation so far:\n${params.conversationContext}` : null,
-            `Your task now: ${params.task}`,
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-        },
-      ],
-    });
-
-    const textBlock = response.content.find((b) => b.type === "text");
-    const content = textBlock && textBlock.type === "text" ? textBlock.text : "";
+    const result = await generateText(
+      {
+        system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}".`,
+        userContent: [
+          memoryContext,
+          engineContext || null,
+          params.conversationContext ? `Conversation so far:\n${params.conversationContext}` : null,
+          `Your task now: ${params.task}`,
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+        maxTokens: 2048,
+        effort: params.effort ?? "medium",
+      },
+      // The only call site that queues a durable retry on total-chain
+      // failure — see fallback-queue.ts's doc comment for why: this is the
+      // one call whose return value (`content`) is the entire deliverable of
+      // the turn, so "retry later and mark the agent COMPLETED" is fully
+      // meaningful on its own, unlike the multi-step/structured call sites
+      // below.
+      { organizationId: params.organizationId, agentId: params.agentId, context: "agent-turn" },
+    );
 
     await setAgentStatus(params.agentId, "COMPLETED");
-    await recordAgentAIUsage(params.agentId, response.usage.input_tokens, response.usage.output_tokens, "agent-turn");
+    await recordAgentAIUsage(params.agentId, result.provider, result.model, result.inputTokens, result.outputTokens, "agent-turn");
 
     return {
-      content,
+      content: result.text,
       usage: {
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
       },
     };
   } catch (error) {
@@ -382,44 +389,31 @@ export async function runAgentVote(params: {
   if (!isAIConnected()) throw new AINotConnectedError();
 
   const persona = getPersona(params.agentType);
-  const client = getAnthropicClient();
 
   await setAgentStatus(params.agentId, "ANALYZING", `Voting on: ${params.topic}`);
 
   try {
     const memoryContext = await loadAgentMemoryContext(params.agentId);
 
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 1024,
-      thinking: { type: "adaptive" },
-      output_config: {
-        effort: "medium",
-        format: zodOutputFormat(VoteSchema),
-      },
+    const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". You are being asked to formally vote on a board decision. Vote APPROVE, REJECT, ESCALATE (needs human/CEO judgment), DISCUSS (need more debate first), DELAY (not enough information yet), or DELEGATE (someone else should own this). Give concrete reasoning grounded in your role.`,
-      messages: [
-        {
-          role: "user",
-          content: [
-            memoryContext,
-            params.conversationContext ? `Discussion so far:\n${params.conversationContext}` : null,
-            `Decision topic: ${params.topic}`,
-            params.description ? `Details: ${params.description}` : null,
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-        },
-      ],
+      userContent: [
+        memoryContext,
+        params.conversationContext ? `Discussion so far:\n${params.conversationContext}` : null,
+        `Decision topic: ${params.topic}`,
+        params.description ? `Details: ${params.description}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      maxTokens: 1024,
+      effort: "medium",
+      schema: VoteSchema,
     });
 
     await setAgentStatus(params.agentId, "COMPLETED");
-    await recordAgentAIUsage(params.agentId, response.usage.input_tokens, response.usage.output_tokens, "agent-vote");
+    await recordAgentAIUsage(params.agentId, result.provider, result.model, result.inputTokens, result.outputTokens, "agent-vote");
 
-    if (!response.parsed_output) {
-      throw new Error("Vote response failed schema validation.");
-    }
-    return response.parsed_output;
+    return result.parsed;
   } catch (error) {
     await setAgentStatus(params.agentId, "IDLE");
     throw error;
@@ -444,44 +438,31 @@ export async function runDeliveryVoteTurn(params: {
   if (!isAIConnected()) throw new AINotConnectedError();
 
   const persona = getPersona(params.agentType);
-  const client = getAnthropicClient();
 
   await setAgentStatus(params.agentId, "ANALYZING", `Voting on: ${params.topic}`);
 
   try {
     const memoryContext = await loadAgentMemoryContext(params.agentId);
 
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 1024,
-      thinking: { type: "adaptive" },
-      output_config: {
-        effort: "medium",
-        format: zodOutputFormat(DeliveryVoteSchema),
-      },
+    const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". You are being asked to formally vote on a real AI Delivery Board decision. Vote APPROVE, REJECT, ESCALATE (needs human/CEO judgment — "Require Human Approval"), DISCUSS (need more debate first), DELAY (not enough information yet), DELEGATE (someone else should own this), or REQUEST_REVISION (the plan needs changes before you can approve it). Give concrete reasoning grounded in your role and the real project data you were given.`,
-      messages: [
-        {
-          role: "user",
-          content: [
-            memoryContext,
-            params.conversationContext ? `Discussion so far:\n${params.conversationContext}` : null,
-            `Decision topic: ${params.topic}`,
-            params.description ? `Details: ${params.description}` : null,
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-        },
-      ],
+      userContent: [
+        memoryContext,
+        params.conversationContext ? `Discussion so far:\n${params.conversationContext}` : null,
+        `Decision topic: ${params.topic}`,
+        params.description ? `Details: ${params.description}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      maxTokens: 1024,
+      effort: "medium",
+      schema: DeliveryVoteSchema,
     });
 
     await setAgentStatus(params.agentId, "COMPLETED");
-    await recordAgentAIUsage(params.agentId, response.usage.input_tokens, response.usage.output_tokens, "delivery-vote-turn");
+    await recordAgentAIUsage(params.agentId, result.provider, result.model, result.inputTokens, result.outputTokens, "delivery-vote-turn");
 
-    if (!response.parsed_output) {
-      throw new Error("Vote response failed schema validation.");
-    }
-    return response.parsed_output;
+    return result.parsed;
   } catch (error) {
     await setAgentStatus(params.agentId, "IDLE");
     throw error;
@@ -511,7 +492,6 @@ export async function runMeetingAgentTurn(params: {
   if (!isAIConnected()) throw new AINotConnectedError();
 
   const persona = getPersona(params.agentType);
-  const client = getAnthropicClient();
 
   await setAgentStatus(params.agentId, "THINKING", params.task);
 
@@ -519,36 +499,26 @@ export async function runMeetingAgentTurn(params: {
     const memoryContext = await loadAgentMemoryContext(params.agentId);
     const meetingLabel = params.meetingLabel ?? "AI Executive Board meeting";
 
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 2048,
-      thinking: { type: "adaptive" },
-      output_config: { effort: params.effort ?? "medium", format: zodOutputFormat(MeetingTurnSchema) },
+    const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". You are speaking in a live ${meetingLabel} (a real boardroom, not a chat). Alongside your actual contribution ("content"), honestly self-report: your priority for this point (LOW/NORMAL/HIGH/URGENT), your genuine confidence in it (0-100 — vary this based on how sure you actually are, never a fixed number), an optional one-line "suggestedAction" if someone should concretely act on this, and optional "evidence" — a specific fact, figure, or piece of reasoning backing your point (omit if you don't have any).`,
-      messages: [
-        {
-          role: "user",
-          content: [
-            memoryContext,
-            params.conversationContext ? `Conversation so far:\n${params.conversationContext}` : null,
-            `Your task now: ${params.task}`,
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-        },
-      ],
+      userContent: [
+        memoryContext,
+        params.conversationContext ? `Conversation so far:\n${params.conversationContext}` : null,
+        `Your task now: ${params.task}`,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      maxTokens: 2048,
+      effort: params.effort ?? "medium",
+      schema: MeetingTurnSchema,
     });
 
     await setAgentStatus(params.agentId, "COMPLETED");
-    await recordAgentAIUsage(params.agentId, response.usage.input_tokens, response.usage.output_tokens, "meeting-agent-turn");
-
-    if (!response.parsed_output) {
-      throw new Error("Meeting turn response failed schema validation.");
-    }
+    await recordAgentAIUsage(params.agentId, result.provider, result.model, result.inputTokens, result.outputTokens, "meeting-agent-turn");
 
     return {
-      ...response.parsed_output,
-      usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens },
+      ...result.parsed,
+      usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens },
     };
   } catch (error) {
     await setAgentStatus(params.agentId, "IDLE");
@@ -572,30 +542,24 @@ export async function runMeetingNotesTurn(params: {
   if (!isAIConnected()) throw new AINotConnectedError();
 
   const persona = getPersona(params.agentType);
-  const client = getAnthropicClient();
 
   await setAgentStatus(params.agentId, "ANALYZING", "Writing meeting notes");
 
   try {
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 2048,
-      thinking: { type: "adaptive" },
-      output_config: { effort: "low", format: zodOutputFormat(MeetingNotesSchema) },
+    const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". Write the official record for this AI Executive Board meeting from its full transcript: a concise "summary" (3-6 sentences), and four separate lists — "actionItems" (concrete assignments made), "risks" (real concerns raised), "recommendations" (suggestions made), "nextSteps" (what happens next). Leave any list empty if the transcript genuinely didn't cover it — never pad a list to make it look complete.`,
-      messages: [{ role: "user", content: params.transcript || "No discussion took place." }],
+      userContent: params.transcript || "No discussion took place.",
+      maxTokens: 2048,
+      effort: "low",
+      schema: MeetingNotesSchema,
     });
 
     await setAgentStatus(params.agentId, "COMPLETED");
-    await recordAgentAIUsage(params.agentId, response.usage.input_tokens, response.usage.output_tokens, "meeting-notes-turn");
-
-    if (!response.parsed_output) {
-      throw new Error("Meeting notes response failed schema validation.");
-    }
+    await recordAgentAIUsage(params.agentId, result.provider, result.model, result.inputTokens, result.outputTokens, "meeting-notes-turn");
 
     return {
-      ...response.parsed_output,
-      usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens },
+      ...result.parsed,
+      usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens },
     };
   } catch (error) {
     await setAgentStatus(params.agentId, "IDLE");
@@ -647,7 +611,6 @@ export async function runReviewAgentTurn(params: {
   if (!isAIConnected()) throw new AINotConnectedError();
 
   const persona = getPersona(params.agentType);
-  const client = getAnthropicClient();
   const schema = params.specialty === "FINANCE" ? FinanceReviewTurnSchema : params.specialty === "LEGAL" ? LegalReviewTurnSchema : ReviewTurnSchema;
 
   await setAgentStatus(params.agentId, "ANALYZING", params.task);
@@ -662,36 +625,26 @@ export async function runReviewAgentTurn(params: {
           ? ` You must also fill in a structured "riskAnalysis": whether contract terms look complete, which clauses (if any) appear to be missing, whether an NDA is warranted, liability/warranty risk, and an honest overall risk level.`
           : "";
 
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 2048,
-      thinking: { type: "adaptive" },
-      output_config: { effort: "medium", format: zodOutputFormat(schema) },
+    const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". You are one of 8 board members in a real AI Proposal Review Board meeting, reviewing a real document before it goes to a client. Give your honest "opinion" (a few sentences, from your role's perspective), concrete "strengths" and "weaknesses" you actually see (empty arrays are genuinely fine if you don't see any), 0-8 concrete "recommendations" you'd honestly stand behind, a "confidenceScore" (0-100, how confident you are in your own assessment — vary this honestly), and — only if you have a real basis to estimate them — a "winProbability" (0-100) and/or "profitMarginEstimate" (a percent). Omit winProbability/profitMarginEstimate entirely rather than guessing if you don't have grounds for either.${specialtyInstruction}`,
-      messages: [
-        {
-          role: "user",
-          content: [
-            memoryContext,
-            params.conversationContext ? `Discussion so far:\n${params.conversationContext}` : null,
-            `Your task now: ${params.task}`,
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-        },
-      ],
+      userContent: [
+        memoryContext,
+        params.conversationContext ? `Discussion so far:\n${params.conversationContext}` : null,
+        `Your task now: ${params.task}`,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      maxTokens: 2048,
+      effort: "medium",
+      schema,
     });
 
     await setAgentStatus(params.agentId, "COMPLETED");
-    await recordAgentAIUsage(params.agentId, response.usage.input_tokens, response.usage.output_tokens, "review-agent-turn");
-
-    if (!response.parsed_output) {
-      throw new Error("Review turn response failed schema validation.");
-    }
+    await recordAgentAIUsage(params.agentId, result.provider, result.model, result.inputTokens, result.outputTokens, "review-agent-turn");
 
     return {
-      ...response.parsed_output,
-      usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens },
+      ...result.parsed,
+      usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens },
     };
   } catch (error) {
     await setAgentStatus(params.agentId, "IDLE");
@@ -715,44 +668,31 @@ export async function runReviewVoteTurn(params: {
   if (!isAIConnected()) throw new AINotConnectedError();
 
   const persona = getPersona(params.agentType);
-  const client = getAnthropicClient();
 
   await setAgentStatus(params.agentId, "ANALYZING", `Voting on: ${params.topic}`);
 
   try {
     const memoryContext = await loadAgentMemoryContext(params.agentId);
 
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 1024,
-      thinking: { type: "adaptive" },
-      output_config: {
-        effort: "medium",
-        format: zodOutputFormat(ReviewVoteSchema),
-      },
+    const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". You are casting your final formal vote in a real AI Proposal Review Board meeting on whether this document should go to the client. Vote APPROVE (ready to send as-is), APPROVE_WITH_CHANGES (send once the small fixes you name are made), REQUEST_REVISION (needs real rework before it should go out — say what), or REJECT (should not go out at all — say why). Give concrete reasoning grounded in your role, not a generic rubber stamp.`,
-      messages: [
-        {
-          role: "user",
-          content: [
-            memoryContext,
-            params.conversationContext ? `Discussion so far:\n${params.conversationContext}` : null,
-            `Document under review: ${params.topic}`,
-            params.description ? `Details: ${params.description}` : null,
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-        },
-      ],
+      userContent: [
+        memoryContext,
+        params.conversationContext ? `Discussion so far:\n${params.conversationContext}` : null,
+        `Document under review: ${params.topic}`,
+        params.description ? `Details: ${params.description}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      maxTokens: 1024,
+      effort: "medium",
+      schema: ReviewVoteSchema,
     });
 
     await setAgentStatus(params.agentId, "COMPLETED");
-    await recordAgentAIUsage(params.agentId, response.usage.input_tokens, response.usage.output_tokens, "review-vote-turn");
+    await recordAgentAIUsage(params.agentId, result.provider, result.model, result.inputTokens, result.outputTokens, "review-vote-turn");
 
-    if (!response.parsed_output) {
-      throw new Error("Review vote response failed schema validation.");
-    }
-    return response.parsed_output;
+    return result.parsed;
   } catch (error) {
     await setAgentStatus(params.agentId, "IDLE");
     throw error;
@@ -775,37 +715,26 @@ export async function runProjectManagerTurn(params: {
   if (!isAIConnected()) throw new AINotConnectedError();
 
   const persona = getPersona("PROJECT_MANAGER");
-  const client = getAnthropicClient();
 
   await setAgentStatus(params.agentId, "ANALYZING", params.task);
 
   try {
     const memoryContext = await loadAgentMemoryContext(params.agentId);
 
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 2048,
-      thinking: { type: "adaptive" },
-      output_config: { effort: "medium", format: zodOutputFormat(ProjectManagerTurnSchema) },
+    const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". You are analyzing ONE specific real project on your own — not in a meeting, not speaking to other agents. Your task: ${params.task}. Give a concise "summary", a real prioritized list of what matters most right now, honest "riskAssessments" reviewing whatever real risk findings you were given (never invent a new one that isn't grounded in the data below), concrete "recommendations", and — only if the data below genuinely supports it — "suggestedAssignments" for currently-unassigned work. Leave any list empty rather than padding it.`,
-      messages: [
-        {
-          role: "user",
-          content: [memoryContext, `Real project data:\n${params.projectContext}`].filter(Boolean).join("\n\n"),
-        },
-      ],
+      userContent: [memoryContext, `Real project data:\n${params.projectContext}`].filter(Boolean).join("\n\n"),
+      maxTokens: 2048,
+      effort: "medium",
+      schema: ProjectManagerTurnSchema,
     });
 
     await setAgentStatus(params.agentId, "COMPLETED");
-    await recordAgentAIUsage(params.agentId, response.usage.input_tokens, response.usage.output_tokens, "project-manager-turn");
-
-    if (!response.parsed_output) {
-      throw new Error("Project manager turn response failed schema validation.");
-    }
+    await recordAgentAIUsage(params.agentId, result.provider, result.model, result.inputTokens, result.outputTokens, "project-manager-turn");
 
     return {
-      ...response.parsed_output,
-      usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens },
+      ...result.parsed,
+      usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens },
     };
   } catch (error) {
     await setAgentStatus(params.agentId, "IDLE");
@@ -837,62 +766,61 @@ export async function runWebSearchDiscovery(params: {
   if (!isAIConnected()) throw new AINotConnectedError();
 
   const persona = getPersona(params.agentType);
-  const client = getAnthropicClient();
 
   await setAgentStatus(params.agentId, "RESEARCHING", `Searching the web: ${params.query}`);
 
   try {
-    const searchResponse = await client.messages.create({
-      model: AGENT_MODEL,
-      max_tokens: 4096,
-      thinking: { type: "adaptive" },
-      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
+    const searchResult = await generateText({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". You have live web search available for this task — use it for real, current information. Never invent a company that didn't actually show up in your search results.`,
-      messages: [
-        {
-          role: "user",
-          content: [
-            params.resultKind === "lead"
-              ? `Search the web and find real, currently-operating companies matching this criteria: "${params.query}".`
-              : `Search the web and find real, currently-operating companies that would make an ideal long-term client matching this profile: "${params.query}".`,
-            params.filtersDescription ? `Additional filters to honor: ${params.filtersDescription}.` : null,
-            `For each one, note its name, official website, industry, and any public contact email/phone you can find, plus one sentence on why it's a good ${params.resultKind === "lead" ? "sales lead" : "client"} fit.`,
-          ]
-            .filter(Boolean)
-            .join(" "),
-        },
-      ],
+      userContent: [
+        params.resultKind === "lead"
+          ? `Search the web and find real, currently-operating companies matching this criteria: "${params.query}".`
+          : `Search the web and find real, currently-operating companies that would make an ideal long-term client matching this profile: "${params.query}".`,
+        params.filtersDescription ? `Additional filters to honor: ${params.filtersDescription}.` : null,
+        `For each one, note its name, official website, industry, and any public contact email/phone you can find, plus one sentence on why it's a good ${params.resultKind === "lead" ? "sales lead" : "client"} fit.`,
+      ]
+        .filter(Boolean)
+        .join(" "),
+      maxTokens: 4096,
+      webSearch: { maxUses: 5 },
     });
 
-    const researchSummary = searchResponse.content
-      .map((block) => (block.type === "text" ? block.text : ""))
-      .filter(Boolean)
-      .join("\n\n");
+    const researchSummary = searchResult.text;
 
     await setAgentStatus(params.agentId, "ANALYZING", "Extracting structured results from research");
 
-    const extraction = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 2048,
-      output_config: { effort: "low", format: zodOutputFormat(DiscoveredCompaniesSchema) },
+    const extraction = await generateStructured({
       system:
         "Extract a clean, deduplicated, structured list of companies from the research notes you're given. Only include companies that were actually named in the notes — never invent one. If the notes found nothing usable, return an empty list.",
-      messages: [{ role: "user", content: researchSummary || "No research notes were produced — no companies were found." }],
+      userContent: researchSummary || "No research notes were produced — no companies were found.",
+      maxTokens: 2048,
+      effort: "low",
+      schema: DiscoveredCompaniesSchema,
     });
 
     await setAgentStatus(params.agentId, "COMPLETED");
-    await recordAgentAIUsage(params.agentId, searchResponse.usage.input_tokens + extraction.usage.input_tokens, searchResponse.usage.output_tokens + extraction.usage.output_tokens, "web-search-discovery");
-
-    if (!extraction.parsed_output) {
-      throw new Error("Discovery extraction failed schema validation.");
-    }
+    // Both passes' token usage is summed under one recordAIUsage call (as it
+    // always was, back when both passes were guaranteed to be Anthropic) —
+    // attributed to the extraction pass's provider/model, since the two
+    // passes can now genuinely be served by two different providers if the
+    // chain fell over mid-turn. An approximation, not a precision billing
+    // split; see this file's header comment in fallback.ts for the same
+    // tradeoff on the other two-pass functions below.
+    await recordAgentAIUsage(
+      params.agentId,
+      extraction.provider,
+      extraction.model,
+      searchResult.inputTokens + extraction.inputTokens,
+      searchResult.outputTokens + extraction.outputTokens,
+      "web-search-discovery",
+    );
 
     return {
-      companies: extraction.parsed_output.companies,
+      companies: extraction.parsed.companies,
       researchSummary,
       usage: {
-        inputTokens: searchResponse.usage.input_tokens + extraction.usage.input_tokens,
-        outputTokens: searchResponse.usage.output_tokens + extraction.usage.output_tokens,
+        inputTokens: searchResult.inputTokens + extraction.inputTokens,
+        outputTokens: searchResult.outputTokens + extraction.outputTokens,
       },
     };
   } catch (error) {
@@ -919,59 +847,51 @@ export async function runCompanyIntelligenceTurn(params: {
   if (!isAIConnected()) throw new AINotConnectedError();
 
   const persona = getPersona(params.agentType);
-  const client = getAnthropicClient();
 
   await setAgentStatus(params.agentId, "RESEARCHING", `Researching ${params.companyName}`);
 
   try {
-    const searchResponse = await client.messages.create({
-      model: AGENT_MODEL,
-      max_tokens: 4096,
-      thinking: { type: "adaptive" },
-      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 6 }],
+    const searchResult = await generateText({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". You have live web search available — use it to genuinely research this real company. Never invent facts you didn't find.`,
-      messages: [
-        {
-          role: "user",
-          content: [
-            `Research this company thoroughly: "${params.companyName}"${params.companyWebsite ? ` (${params.companyWebsite})` : ""}.`,
-            params.companyContext ? `Context already known: ${params.companyContext}` : null,
-            "Cover: what the business actually does, its products and services, the technology it appears to use (from job posts, site tech, integrations), its digital presence quality (website, SEO signals, apparent performance), any real growth/hiring/expansion signals you find, and what business opportunities or software/automation needs a B2B vendor might realistically pitch them.",
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-        },
-      ],
+      userContent: [
+        `Research this company thoroughly: "${params.companyName}"${params.companyWebsite ? ` (${params.companyWebsite})` : ""}.`,
+        params.companyContext ? `Context already known: ${params.companyContext}` : null,
+        "Cover: what the business actually does, its products and services, the technology it appears to use (from job posts, site tech, integrations), its digital presence quality (website, SEO signals, apparent performance), any real growth/hiring/expansion signals you find, and what business opportunities or software/automation needs a B2B vendor might realistically pitch them.",
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      maxTokens: 4096,
+      webSearch: { maxUses: 6 },
     });
 
-    const researchSummary = searchResponse.content
-      .map((block) => (block.type === "text" ? block.text : ""))
-      .filter(Boolean)
-      .join("\n\n");
+    const researchSummary = searchResult.text;
 
     await setAgentStatus(params.agentId, "ANALYZING", "Structuring the intelligence report");
 
-    const extraction = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 3072,
-      output_config: { effort: "medium", format: zodOutputFormat(CompanyIntelligenceOutputSchema) },
+    const extraction = await generateStructured({
       system:
         "Turn the research notes into a structured company intelligence report. Every list should only contain things genuinely supported by the notes — leave a list empty rather than padding it. confidenceScore (0-100) must honestly reflect how much real, specific information the notes actually contained versus how thin/generic they were.",
-      messages: [{ role: "user", content: researchSummary || "No research notes were produced." }],
+      userContent: researchSummary || "No research notes were produced.",
+      maxTokens: 3072,
+      effort: "medium",
+      schema: CompanyIntelligenceOutputSchema,
     });
 
     await setAgentStatus(params.agentId, "COMPLETED");
-    await recordAgentAIUsage(params.agentId, searchResponse.usage.input_tokens + extraction.usage.input_tokens, searchResponse.usage.output_tokens + extraction.usage.output_tokens, "company-intelligence-turn");
-
-    if (!extraction.parsed_output) {
-      throw new Error("Company intelligence extraction failed schema validation.");
-    }
+    await recordAgentAIUsage(
+      params.agentId,
+      extraction.provider,
+      extraction.model,
+      searchResult.inputTokens + extraction.inputTokens,
+      searchResult.outputTokens + extraction.outputTokens,
+      "company-intelligence-turn",
+    );
 
     return {
-      ...extraction.parsed_output,
+      ...extraction.parsed,
       usage: {
-        inputTokens: searchResponse.usage.input_tokens + extraction.usage.input_tokens,
-        outputTokens: searchResponse.usage.output_tokens + extraction.usage.output_tokens,
+        inputTokens: searchResult.inputTokens + extraction.inputTokens,
+        outputTokens: searchResult.outputTokens + extraction.outputTokens,
       },
     };
   } catch (error) {
@@ -1006,54 +926,46 @@ export async function runResearchNoteTurn(params: {
   if (!isAIConnected()) throw new AINotConnectedError();
 
   const persona = getPersona(params.agentType);
-  const client = getAnthropicClient();
   const topicPrompt = RESEARCH_TOPIC_PROMPTS[params.topic] ?? RESEARCH_TOPIC_PROMPTS.GENERAL;
 
   await setAgentStatus(params.agentId, "RESEARCHING", `Researching ${params.companyName}: ${params.topic}`);
 
   try {
-    const searchResponse = await client.messages.create({
-      model: AGENT_MODEL,
-      max_tokens: 3072,
-      thinking: { type: "adaptive" },
-      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
+    const searchResult = await generateText({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". You have live web search available — use it for real, current information. Never invent facts you didn't find.`,
-      messages: [
-        {
-          role: "user",
-          content: `Research ${topicPrompt} for the real company "${params.companyName}"${params.companyWebsite ? ` (${params.companyWebsite})` : ""}.`,
-        },
-      ],
+      userContent: `Research ${topicPrompt} for the real company "${params.companyName}"${params.companyWebsite ? ` (${params.companyWebsite})` : ""}.`,
+      maxTokens: 3072,
+      webSearch: { maxUses: 5 },
     });
 
-    const researchSummary = searchResponse.content
-      .map((block) => (block.type === "text" ? block.text : ""))
-      .filter(Boolean)
-      .join("\n\n");
+    const researchSummary = searchResult.text;
 
     await setAgentStatus(params.agentId, "ANALYZING", "Writing up the research note");
 
-    const extraction = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 1536,
-      output_config: { effort: "low", format: zodOutputFormat(ResearchNoteOutputSchema) },
+    const extraction = await generateStructured({
       system:
         "Write a clean, well-organized research note from these raw research findings — no meta-commentary about the search process itself, just the actual findings. If nothing substantive was found, say so honestly in one sentence rather than padding.",
-      messages: [{ role: "user", content: researchSummary || "No research notes were produced." }],
+      userContent: researchSummary || "No research notes were produced.",
+      maxTokens: 1536,
+      effort: "low",
+      schema: ResearchNoteOutputSchema,
     });
 
     await setAgentStatus(params.agentId, "COMPLETED");
-    await recordAgentAIUsage(params.agentId, searchResponse.usage.input_tokens + extraction.usage.input_tokens, searchResponse.usage.output_tokens + extraction.usage.output_tokens, "research-note-turn");
-
-    if (!extraction.parsed_output) {
-      throw new Error("Research note extraction failed schema validation.");
-    }
+    await recordAgentAIUsage(
+      params.agentId,
+      extraction.provider,
+      extraction.model,
+      searchResult.inputTokens + extraction.inputTokens,
+      searchResult.outputTokens + extraction.outputTokens,
+      "research-note-turn",
+    );
 
     return {
-      content: extraction.parsed_output.content,
+      content: extraction.parsed.content,
       usage: {
-        inputTokens: searchResponse.usage.input_tokens + extraction.usage.input_tokens,
-        outputTokens: searchResponse.usage.output_tokens + extraction.usage.output_tokens,
+        inputTokens: searchResult.inputTokens + extraction.inputTokens,
+        outputTokens: searchResult.outputTokens + extraction.outputTokens,
       },
     };
   } catch (error) {

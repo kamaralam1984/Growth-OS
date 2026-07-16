@@ -1,14 +1,7 @@
 import { z } from "zod";
-import type Anthropic from "@anthropic-ai/sdk";
 
-import {
-  AGENT_MODEL,
-  AIBillingError,
-  AINotConnectedError,
-  getAnthropicClient,
-  isAIBillingError,
-  isAIConnected,
-} from "@/lib/ai/client";
+import { AINotConnectedError, isAIConnected } from "@/lib/ai/client";
+import { generateStructured } from "@/lib/ai/fallback";
 import { NODE_CONFIG_SCHEMAS } from "@/lib/validations/workflow-node-configs";
 import { workflowNodeTypeSchema, workflowTriggerTypeSchema } from "@/lib/validations/workflows";
 import { ALL_NODE_TYPES, NODE_TYPE_META } from "@/app/dashboard/automation/workflows/[id]/_lib/node-type-meta";
@@ -127,45 +120,6 @@ function buildSystemPrompt(): string {
   ].join("\n");
 }
 
-const GENERATE_WORKFLOW_TOOL: Anthropic.Tool = {
-  name: "generate_workflow",
-  description:
-    "Return the complete, structured workflow automation plan for the user's request — the workflow's name, description, trigger, and every DAG step with its exact config and wiring.",
-  input_schema: {
-    type: "object",
-    properties: {
-      name: { type: "string", description: "Short, human-readable workflow name." },
-      description: { type: "string", description: "One or two sentence summary of what this workflow does." },
-      triggerType: {
-        type: "string",
-        enum: [...workflowTriggerTypeSchema.options],
-        description: "The real event that starts this workflow.",
-      },
-      steps: {
-        type: "array",
-        minItems: 1,
-        items: {
-          type: "object",
-          properties: {
-            tempId: { type: "string", description: 'A short local id like "1", "2" — not a database id.' },
-            nodeType: { type: "string", enum: [...workflowNodeTypeSchema.options] },
-            name: { type: "string", description: "Short, human-readable step name." },
-            config: {
-              type: "object",
-              description: "Node-type-specific config — MUST match the JSON schema given for this step's nodeType in the system prompt.",
-            },
-            next: { type: "string", description: 'tempId of the next step. Omit on a terminal step. Never used on a CONDITION step.' },
-            onTrue: { type: "string", description: "CONDITION steps only: tempId to run when the condition is true." },
-            onFalse: { type: "string", description: "CONDITION steps only: tempId to run when the condition is false." },
-          },
-          required: ["tempId", "nodeType", "name", "config"],
-        },
-      },
-    },
-    required: ["name", "description", "triggerType", "steps"],
-  },
-};
-
 function buildUserPrompt(prompt: string): string {
   return `Generate a workflow automation plan for this request:\n\n"${prompt}"\n\nCall the generate_workflow tool with the complete plan.`;
 }
@@ -178,25 +132,25 @@ function buildRetryPrompt(prompt: string, rawInput: unknown, issues: string[]): 
   ].join("\n\n");
 }
 
-async function callGenerateWorkflowTool(client: Anthropic, systemPrompt: string, userContent: string): Promise<unknown> {
-  const response = await client.messages.create({
-    model: AGENT_MODEL,
-    max_tokens: 8192,
-    thinking: { type: "adaptive" },
-    output_config: { effort: "high" },
+/**
+ * Requests the plan as structured JSON output validated against
+ * rawWorkflowPlanSchema — the same real schema parseAndValidate() re-checks
+ * below, plus the business-rule (config shape / DAG wiring) passes. This
+ * used to be a forced Anthropic tool call (`tool_choice: {type: "tool", ...}`);
+ * switched to schema-based structured output so every provider in the
+ * fallback chain (src/lib/ai/fallback.ts) — not just Anthropic — can serve
+ * this call, since none of the free-tier adapters implement custom
+ * tool-calling.
+ */
+async function callGenerateWorkflowPlan(systemPrompt: string, userContent: string): Promise<unknown> {
+  const result = await generateStructured({
     system: systemPrompt,
-    tools: [GENERATE_WORKFLOW_TOOL],
-    tool_choice: { type: "tool", name: "generate_workflow" },
-    messages: [{ role: "user", content: userContent }],
+    userContent,
+    maxTokens: 8192,
+    effort: "high",
+    schema: rawWorkflowPlanSchema,
   });
-
-  const toolUse = response.content.find(
-    (block): block is Anthropic.ToolUseBlock => block.type === "tool_use" && block.name === "generate_workflow",
-  );
-  if (!toolUse) {
-    throw new Error(`Claude did not return a generate_workflow tool call (stop_reason: ${response.stop_reason ?? "unknown"}).`);
-  }
-  return toolUse.input;
+  return result.parsed;
 }
 
 /** Validates config against NODE_CONFIG_SCHEMAS[step.nodeType] for every step — the real per-nodeType shape check, never silently coerced. */
@@ -294,30 +248,17 @@ function parseAndValidate(rawInput: unknown): { plan: WorkflowPlan | null; issue
  */
 export async function generateWorkflowPlan(prompt: string): Promise<WorkflowPlan> {
   if (!isAIConnected()) throw new AINotConnectedError();
-  const client = getAnthropicClient();
   const systemPrompt = buildSystemPrompt();
 
-  let rawInput: unknown;
-  try {
-    rawInput = await callGenerateWorkflowTool(client, systemPrompt, buildUserPrompt(prompt));
-  } catch (error) {
-    if (isAIBillingError(error)) throw new AIBillingError(error);
-    throw error;
-  }
+  const rawInput = await callGenerateWorkflowPlan(systemPrompt, buildUserPrompt(prompt));
 
   const first = parseAndValidate(rawInput);
   if (first.issues.length === 0 && first.plan) {
     return first.plan;
   }
 
-  // One real retry: re-call Claude with the exact validation errors appended, asking it to fix only those.
-  let retryRawInput: unknown;
-  try {
-    retryRawInput = await callGenerateWorkflowTool(client, systemPrompt, buildRetryPrompt(prompt, rawInput, first.issues));
-  } catch (error) {
-    if (isAIBillingError(error)) throw new AIBillingError(error);
-    throw error;
-  }
+  // One real retry: re-call with the exact validation errors appended, asking it to fix only those.
+  const retryRawInput = await callGenerateWorkflowPlan(systemPrompt, buildRetryPrompt(prompt, rawInput, first.issues));
 
   const second = parseAndValidate(retryRawInput);
   if (second.issues.length === 0 && second.plan) {

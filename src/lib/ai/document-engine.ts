@@ -1,17 +1,17 @@
 import { z } from "zod";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 
 import { prisma } from "@/lib/prisma";
-import { AGENT_MODEL, AINotConnectedError, getAnthropicClient, isAIConnected } from "@/lib/ai/client";
+import { AINotConnectedError, isAIConnected } from "@/lib/ai/client";
+import { generateStructured } from "@/lib/ai/fallback";
 import { getPersona } from "@/lib/ai/personas";
 import { publishRealtimeEvent } from "@/lib/realtime/event-bus";
 
 /**
  * AI generation for the Proposal/Contract/Legal-&-Project-Document engine
- * — same client.messages.parse + zodOutputFormat structured-output
- * pattern used everywhere else (see src/lib/ai/agent-runtime.ts). Kept in
- * its own module since these generators are document-shaped (title +
- * structured sections), not agent-turn-shaped.
+ * — same generateStructured fallback-chain pattern used everywhere else
+ * (see src/lib/ai/agent-runtime.ts, src/lib/ai/fallback.ts). Kept in its own
+ * module since these generators are document-shaped (title + structured
+ * sections), not agent-turn-shaped.
  */
 
 async function setAgentStatus(agentId: string, status: "THINKING" | "COMPLETED" | "IDLE", currentTask?: string) {
@@ -83,37 +83,28 @@ export async function generateProposalSections(params: {
 }): Promise<ProposalSections> {
   if (!isAIConnected()) throw new AINotConnectedError();
   const persona = getPersona("PROPOSAL");
-  const client = getAnthropicClient();
 
   await setAgentStatus(params.agentId, "THINKING", `Drafting proposal: ${params.title}`);
 
   try {
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 4096,
-      thinking: { type: "adaptive" },
-      output_config: { effort: "high", format: zodOutputFormat(ProposalSectionsSchema) },
+    const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". You are drafting a premium enterprise sales proposal. Every section must be concrete and grounded in the brief given — never invent client facts, prices, or team names that weren't provided. The estimation.resources/milestones/totalHours must be a genuine, reasonable breakdown for a project of this scope, not a placeholder.`,
-      messages: [
-        {
-          role: "user",
-          content: [
-            `Proposal title: ${params.title}`,
-            params.industry ? `Industry / domain: ${params.industry}` : null,
-            params.pricingModel ? `Pricing model: ${params.pricingModel}` : null,
-            params.companyContext ? `Client context:\n${params.companyContext}` : null,
-            `Brief:\n${params.brief}`,
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-        },
-      ],
+      userContent: [
+        `Proposal title: ${params.title}`,
+        params.industry ? `Industry / domain: ${params.industry}` : null,
+        params.pricingModel ? `Pricing model: ${params.pricingModel}` : null,
+        params.companyContext ? `Client context:\n${params.companyContext}` : null,
+        `Brief:\n${params.brief}`,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      maxTokens: 4096,
+      effort: "high",
+      schema: ProposalSectionsSchema,
     });
 
     await setAgentStatus(params.agentId, "COMPLETED");
-
-    if (!response.parsed_output) throw new Error("Proposal generation response failed schema validation.");
-    return response.parsed_output;
+    return result.parsed;
   } catch (error) {
     await setAgentStatus(params.agentId, "IDLE");
     throw error;
@@ -147,38 +138,30 @@ export async function generateContractContent(params: {
 }): Promise<{ content: string }> {
   if (!isAIConnected()) throw new AINotConnectedError();
   const persona = getPersona("PROPOSAL");
-  const client = getAnthropicClient();
 
   await setAgentStatus(params.agentId, "THINKING", `Drafting contract for ${params.clientName}`);
 
   try {
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 3072,
-      thinking: { type: "adaptive" },
-      output_config: { effort: "high", format: zodOutputFormat(ContractContentSchema) },
+    const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". Draft ${CONTRACT_TYPE_GUIDANCE[params.contractType] ?? "a business agreement"} between "${params.partyName}" (the service provider) and "${params.clientName}" (the client). Write real, professional legal-style prose organized into numbered clauses. This is a genuine draft for review by both parties' counsel, not a toy example — do not include bracketed placeholders like "[insert X]" for anything you were actually given (party names, value, dates); only leave a placeholder for information that truly wasn't provided.`,
-      messages: [
-        {
-          role: "user",
-          content: [
-            `Contract type: ${params.contractType}`,
-            `Provider: ${params.partyName}`,
-            `Client: ${params.clientName}`,
-            params.value != null ? `Contract value: ${params.value}` : null,
-            params.startDate ? `Start date: ${params.startDate}` : null,
-            params.endDate ? `End date: ${params.endDate}` : null,
-            params.brief ? `Additional context:\n${params.brief}` : null,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-        },
-      ],
+      userContent: [
+        `Contract type: ${params.contractType}`,
+        `Provider: ${params.partyName}`,
+        `Client: ${params.clientName}`,
+        params.value != null ? `Contract value: ${params.value}` : null,
+        params.startDate ? `Start date: ${params.startDate}` : null,
+        params.endDate ? `End date: ${params.endDate}` : null,
+        params.brief ? `Additional context:\n${params.brief}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      maxTokens: 3072,
+      effort: "high",
+      schema: ContractContentSchema,
     });
 
     await setAgentStatus(params.agentId, "COMPLETED");
-    if (!response.parsed_output) throw new Error("Contract generation response failed schema validation.");
-    return response.parsed_output;
+    return result.parsed;
   } catch (error) {
     await setAgentStatus(params.agentId, "IDLE");
     throw error;
@@ -219,23 +202,20 @@ export async function generateBusinessDocument(params: {
 }): Promise<{ title: string; content: string }> {
   if (!isAIConnected()) throw new AINotConnectedError();
   const persona = getPersona("PROPOSAL");
-  const client = getAnthropicClient();
 
   await setAgentStatus(params.agentId, "THINKING", `Drafting ${params.kind.replace(/_/g, " ").toLowerCase()}`);
 
   try {
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 3072,
-      thinking: { type: "adaptive" },
-      output_config: { effort: "medium", format: zodOutputFormat(BusinessDocumentContentSchema) },
+    const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". Draft ${BUSINESS_DOC_GUIDANCE[params.kind] ?? "a business document"} for "${params.organizationName}"${params.counterpartyName ? ` and "${params.counterpartyName}"` : ""}. Produce a real, professional, ready-to-review draft — grounded in the brief given, never inventing facts you weren't given.`,
-      messages: [{ role: "user", content: `Document kind: ${params.kind}\n\nBrief:\n${params.brief}` }],
+      userContent: `Document kind: ${params.kind}\n\nBrief:\n${params.brief}`,
+      maxTokens: 3072,
+      effort: "medium",
+      schema: BusinessDocumentContentSchema,
     });
 
     await setAgentStatus(params.agentId, "COMPLETED");
-    if (!response.parsed_output) throw new Error("Business document generation response failed schema validation.");
-    return response.parsed_output;
+    return result.parsed;
   } catch (error) {
     await setAgentStatus(params.agentId, "IDLE");
     throw error;
@@ -266,28 +246,20 @@ export async function suggestProposalRecommendations(params: {
 }): Promise<ProposalRecommendations> {
   if (!isAIConnected()) throw new AINotConnectedError();
   const persona = getPersona("PROPOSAL");
-  const client = getAnthropicClient();
 
   await setAgentStatus(params.agentId, "THINKING", `Reviewing proposal: ${params.proposalTitle}`);
 
   try {
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 2048,
-      thinking: { type: "adaptive" },
-      output_config: { effort: "medium", format: zodOutputFormat(ProposalRecommendationsSchema) },
+    const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". Review this real proposal and suggest concrete, actionable improvements — pricing, additional/upsell/cross-sell services, a better timeline, or a genuine risk to flag. Only surface a recommendation if it's actually grounded in the proposal content; do not pad the list to hit any count.`,
-      messages: [
-        {
-          role: "user",
-          content: [`Proposal: ${params.proposalTitle}`, params.value != null ? `Value: ${params.value}` : null, `Summary:\n${params.proposalSummary}`].filter(Boolean).join("\n\n"),
-        },
-      ],
+      userContent: [`Proposal: ${params.proposalTitle}`, params.value != null ? `Value: ${params.value}` : null, `Summary:\n${params.proposalSummary}`].filter(Boolean).join("\n\n"),
+      maxTokens: 2048,
+      effort: "medium",
+      schema: ProposalRecommendationsSchema,
     });
 
     await setAgentStatus(params.agentId, "COMPLETED");
-    if (!response.parsed_output) throw new Error("Recommendation generation response failed schema validation.");
-    return response.parsed_output;
+    return result.parsed;
   } catch (error) {
     await setAgentStatus(params.agentId, "IDLE");
     throw error;

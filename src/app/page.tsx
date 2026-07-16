@@ -14,7 +14,7 @@ import { Footer } from "@/components/sections/footer";
 
 export default function Home() {
   return (
-    <>
+    <div className="theme-luxury">
       <Navbar />
       <main>
         <Hero />
@@ -44,6 +44,6 @@ export default function Home() {
         </div>
       </main>
       <Footer />
-    </>
+    </div>
   );
 }

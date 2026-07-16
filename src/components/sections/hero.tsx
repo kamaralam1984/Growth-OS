@@ -102,7 +102,7 @@ function Hero() {
               <RevealLine
                 words={HEADLINE_LINE_TWO}
                 className="block"
-                wordClassName="text-gradient-brand"
+                wordClassName="text-gradient-rosegold"
               />
             </motion.h1>
 

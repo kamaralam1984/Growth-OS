@@ -3,17 +3,48 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    restart: unless-stopped
+    # Bound to loopback only — not exposed to the public internet directly.
+    # In production (the "prod" profile below) Caddy is the only public
+    # entry point, terminating TLS and reverse-proxying to this port; for
+    # plain local/self-hosted use without Caddy, reach it via
+    # `curl http://localhost:3000` on the host itself or an SSH tunnel.
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       # Real service-to-service wiring — hostnames are the compose service
       # names below, resolved via Docker's internal DNS.
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/kvl_growthos?schema=public
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your .env file, e.g. via: openssl rand -hex 24}@postgres:5432/kvl_growthos?schema=public
       REDIS_URL: redis://redis:6379
       NODE_ENV: production
       # Generate a real secret for local/self-hosted use:
       #   openssl rand -base64 32
       AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET in your .env file, e.g. via: openssl rand -base64 32}
+      # Real public URL of this deployment — required so Auth.js generates
+      # correct callback/redirect URLs when running behind Caddy instead of
+      # being accessed directly. Leave unset for plain localhost use.
+      AUTH_URL: ${AUTH_URL:-}
+      # Always true in this compose topology: the app is only ever reached
+      # through the Caddy reverse proxy (or a local port-forward), never
+      # directly from the internet, so Auth.js can safely trust the
+      # X-Forwarded-Host header Caddy sets.
+      AUTH_TRUST_HOST: "true"
+      # The 5 independent AES-256-GCM key domains — see .env.example for what
+      # each protects. All optional: each feature honestly degrades to
+      # "not configured" until its own key is set, same as running without
+      # Docker at all.
+      AGENT_MEMORY_ENCRYPTION_KEY: ${AGENT_MEMORY_ENCRYPTION_KEY:-}
+      INTEGRATION_TOKEN_ENCRYPTION_KEY: ${INTEGRATION_TOKEN_ENCRYPTION_KEY:-}
+      SECRETS_MANAGER_ENCRYPTION_KEY: ${SECRETS_MANAGER_ENCRYPTION_KEY:-}
+      WEBHOOK_SECRET_ENCRYPTION_KEY: ${WEBHOOK_SECRET_ENCRYPTION_KEY:-}
+      TWO_FACTOR_SECRET_ENCRYPTION_KEY: ${TWO_FACTOR_SECRET_ENCRYPTION_KEY:-}
+      # AI agent runtime — paid provider + free fallback chain (see
+      # src/lib/ai/fallback.ts). All optional: with none set, AI features
+      # honestly show "not connected" rather than fabricating output.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -37,12 +68,17 @@ services:
 
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your .env file, e.g. via: openssl rand -hex 24}
       POSTGRES_DB: kvl_growthos
+    # Loopback-only — the database is never exposed to the public internet.
+    # App/redis reach it via Docker's internal network regardless of this
+    # host-port publish; this is purely for host-side debugging (psql over
+    # an SSH tunnel), same reasoning as the app service above.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -53,8 +89,10 @@ services:
 
   redis:
     image: redis:7
+    restart: unless-stopped
+    # Loopback-only — same reasoning as postgres above.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -63,7 +101,29 @@ services:
       timeout: 5s
       retries: 5
 
+  # Real public entry point for a production deployment — terminates TLS
+  # (automatic Let's Encrypt via Caddy, zero manual cert config) and reverse
+  # proxies to the app service over Docker's internal network. Only started
+  # with `docker compose --profile prod up -d` — plain `docker compose up`
+  # (local/dev use) never starts it, matching how AUTH_SECRET/POSTGRES_PASSWORD
+  # are already required-but-dev-still-works via .env.
+  caddy:
+    image: caddy:2
+    profiles: ["prod"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
 volumes:
   postgres_data:
   redis_data:
   storage_documents:
+  caddy_data:
+  caddy_config:

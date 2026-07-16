@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 
 import { prisma } from "@/lib/prisma";
-import { AGENT_MODEL, AINotConnectedError, getAnthropicClient, isAIConnected } from "@/lib/ai/client";
+import { AINotConnectedError, isAIConnected } from "@/lib/ai/client";
+import { generateStructured } from "@/lib/ai/fallback";
 
 const TaskSuggestionSchema = z.object({
   suggestions: z
@@ -33,7 +33,6 @@ export type TaskEngineSuggestions = z.infer<typeof TaskSuggestionSchema>;
  */
 export async function generateTaskSuggestions(organizationId: string): Promise<TaskEngineSuggestions> {
   if (!isAIConnected()) throw new AINotConnectedError();
-  const client = getAnthropicClient();
 
   const tasks = await prisma.task.findMany({
     where: { organizationId, status: { notIn: ["COMPLETED", "CANCELLED"] } },
@@ -56,18 +55,14 @@ export async function generateTaskSuggestions(organizationId: string): Promise<T
     })
     .join("\n");
 
-  const response = await client.messages.parse({
-    model: AGENT_MODEL,
-    max_tokens: 2048,
-    thinking: { type: "adaptive" },
-    output_config: { effort: "medium", format: zodOutputFormat(TaskSuggestionSchema) },
+  const result = await generateStructured({
     system:
       "You are the AI Task Engine inside an enterprise CRM. You are given a real list of this organization's currently open tasks, each with its real status, priority, due date, and dependency list. Identify which tasks are genuinely blocked (a listed dependency isn't COMPLETED yet), suggest an honest priority for each based on due date and business context (a task linked to a real deal outranks one that isn't), and where a task looks like a repeatable/rote pattern, name one concrete automation opportunity. Reference tasks only by the [id] values given — never invent a task that isn't in the list.",
-    messages: [{ role: "user", content: `Open tasks:\n${taskSummaries}` }],
+    userContent: `Open tasks:\n${taskSummaries}`,
+    maxTokens: 2048,
+    effort: "medium",
+    schema: TaskSuggestionSchema,
   });
 
-  if (!response.parsed_output) {
-    throw new Error("Task suggestion response failed schema validation.");
-  }
-  return response.parsed_output;
+  return result.parsed;
 }

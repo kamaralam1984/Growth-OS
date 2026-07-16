@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 
+import { isAIConnected, AINotConnectedError } from "@/lib/ai/client";
+import { generateText } from "@/lib/ai/fallback";
 import { prisma } from "@/lib/prisma";
-import { getAnthropicClient, isAIConnected, AINotConnectedError, AIBillingError, isAIBillingError, AGENT_MODEL } from "@/lib/ai/client";
 import { retrieveContext, type RetrievedItem } from "./retrieval";
 import type { Prisma } from "@/generated/prisma/client";
 
@@ -65,22 +66,12 @@ export async function answerFromKnowledge(organizationId: string, userId: string
 Sources:
 ${contextBlock}`;
 
-  const client = getAnthropicClient();
-  let answerText: string;
-  try {
-    const response = await client.messages.create({
-      model: AGENT_MODEL,
-      max_tokens: 1024,
-      thinking: { type: "adaptive" },
-      system: systemPrompt,
-      messages: [{ role: "user", content: trimmedQuestion }],
-    });
-    const textBlock = response.content.find((b) => b.type === "text");
-    answerText = textBlock && textBlock.type === "text" ? textBlock.text : "";
-  } catch (error) {
-    if (isAIBillingError(error)) throw new AIBillingError(error);
-    throw error;
-  }
+  const result = await generateText({
+    system: systemPrompt,
+    userContent: trimmedQuestion,
+    maxTokens: 1024,
+  });
+  const answerText = result.text;
 
   const citationRows: Prisma.CitationCreateManyInput[] = retrieved.map((item) => ({
     organizationId,

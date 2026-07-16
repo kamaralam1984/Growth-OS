@@ -16,6 +16,7 @@ const PROVIDER_LABELS: Record<AIUsageProvider, string> = {
   OPENAI: "OpenAI",
   GOOGLE_GEMINI: "Google Gemini",
   GROQ: "Groq",
+  OPENROUTER: "OpenRouter",
   EMBEDDING: "Embeddings",
 };
 

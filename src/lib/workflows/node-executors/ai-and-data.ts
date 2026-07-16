@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 
 import { prisma } from "@/lib/prisma";
-import { AGENT_MODEL, AIBillingError, AINotConnectedError, getAnthropicClient, isAIBillingError, isAIConnected } from "@/lib/ai/client";
+import { AINotConnectedError, isAIConnected } from "@/lib/ai/client";
+import { generateStructured, generateText } from "@/lib/ai/fallback";
 import { getPersona, type ExecutiveAgentType } from "@/lib/ai/personas";
 import { computeLeadScore } from "@/lib/lead-scoring";
 import { computeCompanyHealth, computePipelineTotals } from "@/lib/company-health";
@@ -127,46 +127,29 @@ export const AI_AND_DATA_EXECUTORS: NodeExecutorMap = {
       ? `${persona.systemPrompt}\n\nYou are executing one automated step of a real Workflow — respond directly to the task below, no meeting/board framing.`
       : "You are an AI automation step inside KVL GrowthOS, executing one real Workflow action. Respond directly and concisely to the task given.";
 
-    const client = getAnthropicClient();
     const outputSchemaConfig = config.outputSchema as Record<string, "string" | "number" | "boolean"> | undefined;
 
-    try {
-      if (outputSchemaConfig && Object.keys(outputSchemaConfig).length > 0) {
-        const shape: Record<string, z.ZodTypeAny> = {};
-        for (const [field, fieldType] of Object.entries(outputSchemaConfig)) {
-          const zodType = OUTPUT_FIELD_TYPES[fieldType];
-          if (!zodType) throw new Error(`AI_ACTION node's outputSchema field "${field}" has unsupported type "${fieldType}". Valid: string, number, boolean.`);
-          shape[field] = zodType;
-        }
-
-        const response = await client.messages.parse({
-          model: AGENT_MODEL,
-          max_tokens: 2048,
-          thinking: { type: "adaptive" },
-          output_config: { effort: "medium", format: zodOutputFormat(z.object(shape)) },
-          system,
-          messages: [{ role: "user", content: prompt }],
-        });
-
-        if (!response.parsed_output) throw new Error("AI_ACTION structured output failed schema validation.");
-        return { output: { text: JSON.stringify(response.parsed_output), ...response.parsed_output } };
+    if (outputSchemaConfig && Object.keys(outputSchemaConfig).length > 0) {
+      const shape: Record<string, z.ZodTypeAny> = {};
+      for (const [field, fieldType] of Object.entries(outputSchemaConfig)) {
+        const zodType = OUTPUT_FIELD_TYPES[fieldType];
+        if (!zodType) throw new Error(`AI_ACTION node's outputSchema field "${field}" has unsupported type "${fieldType}". Valid: string, number, boolean.`);
+        shape[field] = zodType;
       }
 
-      const response = await client.messages.create({
-        model: AGENT_MODEL,
-        max_tokens: 2048,
-        thinking: { type: "adaptive" },
+      const result = await generateStructured({
         system,
-        messages: [{ role: "user", content: prompt }],
+        userContent: prompt,
+        maxTokens: 2048,
+        effort: "medium",
+        schema: z.object(shape),
       });
 
-      const textBlock = response.content.find((b) => b.type === "text");
-      const text = textBlock && textBlock.type === "text" ? textBlock.text : "";
-      return { output: { text } };
-    } catch (error) {
-      if (isAIBillingError(error)) throw new AIBillingError(error);
-      throw error;
+      return { output: { text: JSON.stringify(result.parsed), ...result.parsed } };
     }
+
+    const result = await generateText({ system, userContent: prompt, maxTokens: 2048 });
+    return { output: { text: result.text } };
   },
 
   // config: { functionName: string, args?: Record<string, unknown> }

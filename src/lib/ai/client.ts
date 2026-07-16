@@ -1,12 +1,17 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 /**
- * Whether real Claude API calls can be made. Every AI runtime function checks
- * this first — with no key configured, the app must show an explicit
+ * Whether real AI calls can be made through ANY provider in the fallback
+ * chain (Anthropic → Groq → Gemini → OpenRouter — see src/lib/ai/fallback.ts)
+ * — not just the paid Anthropic key. Every AI runtime function checks this
+ * first; with no provider configured at all, the app must show an explicit
  * "AI not connected" state, never fabricated/placeholder agent output.
+ * Deliberately a plain env-var check with no imports from the provider
+ * modules, to avoid a circular import (every provider adapter, including
+ * Anthropic's own, is free to import from this file).
  */
 export function isAIConnected(): boolean {
-  return !!process.env.ANTHROPIC_API_KEY;
+  return !!(process.env.ANTHROPIC_API_KEY || process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY);
 }
 
 let client: Anthropic | null = null;

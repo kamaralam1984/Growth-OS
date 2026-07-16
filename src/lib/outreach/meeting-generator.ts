@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 
 import { prisma } from "@/lib/prisma";
-import { AGENT_MODEL, AINotConnectedError, getAnthropicClient, isAIConnected } from "@/lib/ai/client";
+import { AINotConnectedError, isAIConnected } from "@/lib/ai/client";
+import { generateStructured } from "@/lib/ai/fallback";
 import { getPersona } from "@/lib/ai/personas";
 import { buildContactContext } from "./personalization";
 
@@ -29,7 +29,6 @@ export async function generateMeetingRequest(contactId: string, proposedTimes: s
   const contact = await prisma.contact.findUniqueOrThrow({ where: { id: contactId } });
   const context = await buildContactContext(contactId);
   const persona = getPersona("OUTREACH");
-  const client = getAnthropicClient();
   const outreachAgent = await prisma.aIAgentInstance.findFirst({ where: { organizationId: contact.organizationId, type: "OUTREACH" } });
 
   if (outreachAgent) {
@@ -37,26 +36,19 @@ export async function generateMeetingRequest(contactId: string, proposedTimes: s
   }
 
   try {
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 1200,
-      thinking: { type: "adaptive" },
-      output_config: { effort: "low", format: zodOutputFormat(MeetingRequestSchema) },
+    const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nWrite a real meeting-request email plus a genuinely useful agenda and 2-5 discussion topics for that meeting — grounded strictly in the real context below, never invented. If proposed times are given, reference them naturally in the email.`,
-      messages: [
-        {
-          role: "user",
-          content: `Real context about this contact:\n\n${context}\n\n${proposedTimes.length > 0 ? `Proposed meeting times: ${proposedTimes.join(", ")}` : "No specific times proposed yet — ask for their availability."}\n\nWrite the meeting request now.`,
-        },
-      ],
+      userContent: `Real context about this contact:\n\n${context}\n\n${proposedTimes.length > 0 ? `Proposed meeting times: ${proposedTimes.join(", ")}` : "No specific times proposed yet — ask for their availability."}\n\nWrite the meeting request now.`,
+      maxTokens: 1200,
+      effort: "low",
+      schema: MeetingRequestSchema,
     });
 
     if (outreachAgent) {
       await prisma.aIAgentInstance.update({ where: { id: outreachAgent.id }, data: { status: "COMPLETED" } });
     }
-    if (!response.parsed_output) throw new Error("Meeting request response failed schema validation.");
 
-    return response.parsed_output;
+    return result.parsed;
   } catch (error) {
     if (outreachAgent) {
       await prisma.aIAgentInstance.update({ where: { id: outreachAgent.id }, data: { status: "IDLE" } }).catch(() => {});

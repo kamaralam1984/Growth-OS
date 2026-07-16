@@ -2,13 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
 import { notifyUser } from "@/lib/notifications";
-import { AGENT_MODEL, getAnthropicClient, isAIConnected } from "@/lib/ai/client";
+import { isAIConnected } from "@/lib/ai/client";
+import { generateStructured } from "@/lib/ai/fallback";
 import type { DraftChannel, ReplySentiment } from "@/generated/prisma/client";
 
 export interface ActionResult {
@@ -26,15 +26,14 @@ const SentimentSchema = z.object({ sentiment: z.enum(["POSITIVE", "NEUTRAL", "NE
 async function classifySentiment(content: string): Promise<ReplySentiment | null> {
   if (!isAIConnected()) return null;
   try {
-    const client = getAnthropicClient();
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 100,
-      output_config: { effort: "low", format: zodOutputFormat(SentimentSchema) },
+    const result = await generateStructured({
       system: "Classify the sentiment of this real B2B cold-outreach reply as POSITIVE (interested), NEUTRAL (unclear/needs more info), or NEGATIVE (not interested/unsubscribe).",
-      messages: [{ role: "user", content }],
+      userContent: content,
+      maxTokens: 100,
+      effort: "low",
+      schema: SentimentSchema,
     });
-    return response.parsed_output?.sentiment ?? null;
+    return result.parsed.sentiment;
   } catch (error) {
     console.error("[outreach] classifySentiment failed:", error);
     return null;

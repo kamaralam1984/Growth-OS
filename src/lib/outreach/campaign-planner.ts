@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 
 import { prisma } from "@/lib/prisma";
-import { AGENT_MODEL, AINotConnectedError, getAnthropicClient, isAIConnected } from "@/lib/ai/client";
+import { AINotConnectedError, isAIConnected } from "@/lib/ai/client";
+import { generateStructured } from "@/lib/ai/fallback";
 import { getPersona } from "@/lib/ai/personas";
 
 const PlanResponseSchema = z.object({
@@ -54,7 +54,6 @@ export async function planCampaign(
   const { matchingContactsCount, estimatedSuccessPotential } = await computeSuccessPotential(organizationId, input.targetIndustry, input.targetCountry);
 
   const persona = getPersona("MARKETING");
-  const client = getAnthropicClient();
   const marketingAgent = await prisma.aIAgentInstance.findFirst({ where: { organizationId, type: "MARKETING" } });
 
   if (marketingAgent) {
@@ -62,27 +61,19 @@ export async function planCampaign(
   }
 
   try {
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: 1200,
-      thinking: { type: "adaptive" },
-      output_config: { effort: "low", format: zodOutputFormat(PlanResponseSchema) },
+    const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYou are the AI Campaign Planner. Ground everything in the real numbers given below — never invent a contact count or score. If the real matching audience is small, say so honestly and suggest broadening the target rather than pretending the campaign will reach more people than it will.`,
-      messages: [
-        {
-          role: "user",
-          content: `Campaign goal: ${input.goal || "not specified"}\nTarget industry: ${input.targetIndustry || "not specified"}\nTarget country: ${input.targetCountry || "not specified"}\nReal matching contacts in the CRM right now: ${matchingContactsCount}\nComputed success potential (deterministic, from real lead scores + audience size): ${estimatedSuccessPotential}/100\n\nWrite a short campaign plan narrative and up to 5 suggested refinements.`,
-        },
-      ],
+      userContent: `Campaign goal: ${input.goal || "not specified"}\nTarget industry: ${input.targetIndustry || "not specified"}\nTarget country: ${input.targetCountry || "not specified"}\nReal matching contacts in the CRM right now: ${matchingContactsCount}\nComputed success potential (deterministic, from real lead scores + audience size): ${estimatedSuccessPotential}/100\n\nWrite a short campaign plan narrative and up to 5 suggested refinements.`,
+      maxTokens: 1200,
+      effort: "low",
+      schema: PlanResponseSchema,
     });
 
     if (marketingAgent) {
       await prisma.aIAgentInstance.update({ where: { id: marketingAgent.id }, data: { status: "COMPLETED" } });
     }
 
-    if (!response.parsed_output) throw new Error("Campaign plan response failed schema validation.");
-
-    const aiPlanNotes = [response.parsed_output.narrative, ...response.parsed_output.suggestedRefinements.map((r) => `• ${r}`)].join("\n");
+    const aiPlanNotes = [result.parsed.narrative, ...result.parsed.suggestedRefinements.map((r) => `• ${r}`)].join("\n");
     return { aiPlanNotes, estimatedSuccessPotential, matchingContactsCount };
   } catch (error) {
     if (marketingAgent) {

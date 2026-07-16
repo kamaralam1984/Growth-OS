@@ -2925,6 +2925,7 @@ enum AIUsageProvider {
   OPENAI
   GOOGLE_GEMINI
   GROQ
+  OPENROUTER
   EMBEDDING
 }
 
