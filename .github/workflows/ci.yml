@@ -1,0 +1,181 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref so pushing twice to a PR doesn't
+# burn double the CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Minimal real env this app needs to boot (see .env.example) — everything
+  # else (Stripe/Razorpay/40+ integration providers, encryption keys, etc.)
+  # is genuinely optional and the app degrades honestly to "Not Configured"
+  # without it. AUTH_SECRET is generated fresh per run below, never
+  # committed.
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/kvl_growthos_test?schema=public
+  REDIS_URL: redis://localhost:6379
+  NODE_ENV: test
+
+jobs:
+  build-and-test:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kvl_growthos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Generate a real per-run AUTH_SECRET
+        run: echo "AUTH_SECRET=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Apply migrations to the service Postgres
+        run: npx prisma migrate deploy
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      # Non-blocking: as of this writing `npm audit --audit-level=high` genuinely
+      # fails today on two real high-severity advisories with NO available fix
+      # (nodemailer's SMTP/CRLF injection family — GHSA-c7w3-x93f-qmm8 et al.,
+      # pulled in transitively via next-auth/@auth/core; and xlsx's prototype
+      # pollution/ReDoS — GHSA-4r6h-8v6p-xvw6, GHSA-5pgg-2g8v-p4x9, which has no
+      # upstream release at all). Making this step blocking today would fail
+      # every single run for reasons this workflow change can't fix — the
+      # step still runs and its output is always visible in the log so a real
+      # NEW high-severity advisory is never silently missed, it's just not a
+      # hard merge gate until those two are actually resolved (upgrade
+      # nodemailer once a patched release exists; replace/drop xlsx).
+      - name: Audit dependencies (npm audit --audit-level=high)
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+      - name: Unit tests
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload coverage (informational, not a merge gate)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  e2e:
+    name: Playwright E2E
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kvl_growthos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Generate a real per-run AUTH_SECRET
+        run: echo "AUTH_SECRET=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Apply migrations to the service Postgres
+        run: npx prisma migrate deploy
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Build (E2E runs against a real production build via `next start`)
+        run: npm run build
+
+      - name: Run Playwright E2E suite
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore

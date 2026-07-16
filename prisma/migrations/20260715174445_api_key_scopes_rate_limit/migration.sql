@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "ApiKey" ADD COLUMN     "rateLimitPerHour" INTEGER NOT NULL DEFAULT 1000,
+ADD COLUMN     "scopes" TEXT[] DEFAULT ARRAY[]::TEXT[];

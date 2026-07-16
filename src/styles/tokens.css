@@ -1,0 +1,116 @@
+/**
+ * KVL GrowthOS — Design Tokens
+ *
+ * Static, non-theme-switchable primitives (brand color ramps, radius
+ * scale, shadows, ease curves) are declared directly inside the
+ * `@theme` block in globals.css, since Tailwind v4 needs them there to
+ * generate utility classes.
+ *
+ * This file holds the SEMANTIC layer: tokens whose value flips between
+ * dark (default) and light themes via the `data-theme` attribute on
+ * <html>. globals.css re-exposes these to Tailwind with `@theme inline`.
+ */
+
+:root {
+  /* ================= Dark theme (default) — luxury near-black with emerald/blue/purple brand identity =================
+     Brand palette per spec: Emerald primary, Electric Blue secondary, Purple
+     accent. Surfaces moved off the old rose-tinted near-black ramp onto the
+     neutral ramp (rose is now reserved for --destructive only, matching the
+     spec's separate "Danger: Red" token). */
+  --background: var(--color-neutral-1000);
+  --foreground: var(--color-neutral-50);
+
+  --card: var(--color-neutral-975);
+  --card-foreground: var(--color-neutral-50);
+  --popover: var(--color-neutral-950);
+  --popover-foreground: var(--color-neutral-50);
+
+  --primary: var(--color-emerald-500);
+  --primary-foreground: var(--color-neutral-975);
+  --secondary: var(--color-blue-950);
+  --secondary-foreground: var(--color-neutral-50);
+  --muted: var(--color-neutral-950);
+  --muted-foreground: var(--color-neutral-400);
+  --accent: var(--color-purple-950);
+  --accent-foreground: var(--color-neutral-50);
+  --destructive: var(--color-rose-500);
+  --destructive-foreground: var(--color-neutral-975);
+
+  --border: color-mix(in srgb, white 10%, transparent);
+  --input: color-mix(in srgb, white 14%, transparent);
+  --ring: var(--color-emerald-500);
+
+  --sidebar: var(--color-neutral-975);
+  --sidebar-foreground: var(--color-neutral-200);
+  --sidebar-primary: var(--color-emerald-500);
+  --sidebar-primary-foreground: var(--color-neutral-975);
+  --sidebar-accent: var(--color-purple-950);
+  --sidebar-accent-foreground: var(--color-neutral-50);
+  --sidebar-border: color-mix(in srgb, white 8%, transparent);
+  --sidebar-ring: var(--color-emerald-500);
+
+  --chart-1: var(--color-emerald-400);
+  --chart-2: var(--color-blue-400);
+  --chart-3: var(--color-purple-400);
+  --chart-4: var(--color-neutral-300);
+  --chart-5: var(--color-neutral-500);
+
+  /* Glassmorphism — not exposed as Tailwind utilities, used directly by .glass-panel */
+  --glass-bg: color-mix(in srgb, white 6%, transparent);
+  --glass-bg-strong: color-mix(in srgb, white 10%, transparent);
+  --glass-border: color-mix(in srgb, white 12%, transparent);
+  --glass-blur: 20px;
+
+  /* Motion durations — mirrored as JS constants in src/animations (CSS vars
+     aren't read at runtime for animation code; kept here for documentation
+     and for any pure-CSS transition that wants to match). */
+  --duration-fast: 150ms;
+  --duration-base: 300ms;
+  --duration-slow: 600ms;
+  --duration-slower: 900ms;
+}
+
+/* ================= Light theme override ================= */
+:root[data-theme="light"] {
+  --background: var(--color-neutral-0);
+  --foreground: var(--color-neutral-975);
+
+  --card: var(--color-neutral-0);
+  --card-foreground: var(--color-neutral-975);
+  --popover: var(--color-neutral-0);
+  --popover-foreground: var(--color-neutral-975);
+
+  --primary: var(--color-emerald-600);
+  --primary-foreground: var(--color-neutral-0);
+  --secondary: var(--color-blue-50);
+  --secondary-foreground: var(--color-blue-800);
+  --muted: var(--color-neutral-50);
+  --muted-foreground: var(--color-neutral-600);
+  --accent: var(--color-purple-50);
+  --accent-foreground: var(--color-purple-800);
+  --destructive: var(--color-rose-600);
+  --destructive-foreground: var(--color-neutral-0);
+
+  --border: color-mix(in srgb, black 10%, transparent);
+  --input: color-mix(in srgb, black 14%, transparent);
+  --ring: var(--color-emerald-600);
+
+  --sidebar: var(--color-neutral-50);
+  --sidebar-foreground: var(--color-neutral-700);
+  --sidebar-primary: var(--color-emerald-600);
+  --sidebar-primary-foreground: var(--color-neutral-0);
+  --sidebar-accent: var(--color-purple-50);
+  --sidebar-accent-foreground: var(--color-purple-800);
+  --sidebar-border: color-mix(in srgb, black 8%, transparent);
+  --sidebar-ring: var(--color-emerald-600);
+
+  --chart-1: var(--color-emerald-600);
+  --chart-2: var(--color-blue-600);
+  --chart-3: var(--color-purple-600);
+  --chart-4: var(--color-neutral-700);
+  --chart-5: var(--color-neutral-500);
+
+  --glass-bg: color-mix(in srgb, white 60%, transparent);
+  --glass-bg-strong: color-mix(in srgb, white 78%, transparent);
+  --glass-border: color-mix(in srgb, black 8%, transparent);
+}

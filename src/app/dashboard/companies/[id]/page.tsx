@@ -1,0 +1,475 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import {
+  ArrowLeft,
+  FileText,
+  FolderKanban,
+  Users2,
+  Globe,
+  Mail,
+  Phone,
+  MessageSquare,
+  MapPin,
+  Building2,
+  Link2,
+  FileDown,
+} from "lucide-react";
+
+import { Container } from "@/components/ui/container";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { prisma } from "@/lib/prisma";
+import { formatCurrency } from "@/app/dashboard/_lib/format";
+import { requireActiveMembership } from "@/app/dashboard/_lib/require-membership";
+import { LeadScoreBadge } from "@/app/dashboard/_components/lead-score-badge";
+import { WatchlistPicker } from "@/app/dashboard/_components/watchlist-picker";
+import { CompanyEditForm } from "../_components/company-edit-form";
+import { LeadScorePanel } from "../_components/lead-score-panel";
+import { CompanyIntelligencePanel } from "../_components/company-intelligence-panel";
+import { CompanyTimeline } from "../_components/company-timeline";
+import { CompanyMap } from "../_components/company-map";
+import { CrmActionsPanel } from "../_components/crm-actions-panel";
+
+export default async function CompanyDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const { membership } = await requireActiveMembership(`/dashboard/companies/${id}`);
+
+  const company = await prisma.company.findUnique({
+    where: { id },
+    include: {
+      leads: { orderBy: { createdAt: "desc" }, take: 10 },
+      clients: { orderBy: { createdAt: "desc" }, take: 10 },
+      projects: { orderBy: { createdAt: "desc" }, take: 10 },
+      proposals: { orderBy: { createdAt: "desc" }, take: 10 },
+      leadScore: true,
+      intelligenceRuns: { orderBy: { createdAt: "desc" }, take: 1 },
+      researchNotes: { orderBy: { createdAt: "desc" }, take: 20 },
+      timelineEvents: { orderBy: { occurredAt: "desc" }, take: 50 },
+      watchlistEntries: { select: { watchlistId: true } },
+    },
+  });
+
+  if (!company || company.organizationId !== membership.organizationId) {
+    notFound();
+  }
+
+  const [watchlists, members] = await Promise.all([
+    prisma.watchlist.findMany({
+      where: { organizationId: membership.organizationId },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    }),
+    prisma.membership.findMany({
+      where: { organizationId: membership.organizationId, status: "ACTIVE" },
+      select: { user: { select: { id: true, name: true } } },
+      orderBy: { createdAt: "asc" },
+    }),
+  ]);
+
+  const canDelete = membership.role === "OWNER" || membership.role === "ADMIN";
+  const socialLinks = (company.socialLinks ?? {}) as { linkedin?: string; facebook?: string; twitter?: string; instagram?: string };
+  const hasHQ = company.headquartersCity || company.headquartersState || company.headquartersCountry;
+  const latestReport = company.intelligenceRuns[0] ?? null;
+
+  return (
+    <main className="py-8">
+      <Container className="flex flex-col gap-6">
+        <Link
+          href="/dashboard/companies"
+          className="flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ArrowLeft className="size-4" /> Back to Companies
+        </Link>
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            {company.logo ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={company.logo} alt="" className="size-12 rounded-xl border border-border object-cover" />
+            ) : (
+              <span className="flex size-12 items-center justify-center rounded-xl border border-border bg-muted text-muted-foreground">
+                <Building2 className="size-6" />
+              </span>
+            )}
+            <div>
+              <h1 className="text-2xl font-semibold tracking-tight text-foreground">{company.name}</h1>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <Badge variant="outline">{company.status}</Badge>
+                {company.industry && <Badge variant="outline">{company.industry}</Badge>}
+                {company.leadScore && <LeadScoreBadge band={company.leadScore.band} score={company.leadScore.overallScore} />}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <a
+              href={`/api/export/companies/${company.id}`}
+              className="flex items-center gap-1.5 text-sm text-primary hover:underline"
+            >
+              <FileDown className="size-4" /> Download PDF
+            </a>
+            <WatchlistPicker
+              companyId={company.id}
+              watchlists={watchlists}
+              memberOf={company.watchlistEntries.map((w) => w.watchlistId)}
+            />
+          </div>
+        </div>
+
+        <Tabs defaultValue="overview">
+          <TabsList>
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="intelligence">Intelligence</TabsTrigger>
+            <TabsTrigger value="timeline">Timeline ({company.timelineEvents.length})</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="overview">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+              <div className="flex flex-col gap-4 lg:col-span-2">
+                {company.description && (
+                  <Card glass>
+                    <CardContent className="p-5 text-sm text-muted-foreground">{company.description}</CardContent>
+                  </Card>
+                )}
+
+                {(company.technologies.length > 0 || company.products.length > 0 || company.servicesOffered.length > 0) && (
+                  <Card glass>
+                    <CardHeader>
+                      <CardTitle className="text-base">Technology, products &amp; services</CardTitle>
+                    </CardHeader>
+                    <CardContent className="flex flex-col gap-3 pt-0">
+                      {company.technologies.length > 0 && (
+                        <div>
+                          <p className="mb-1.5 text-xs font-semibold text-foreground">Technologies</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {company.technologies.map((t) => (
+                              <Badge key={t} variant="accent">
+                                {t}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {company.products.length > 0 && (
+                        <div>
+                          <p className="mb-1.5 text-xs font-semibold text-foreground">Products</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {company.products.map((t) => (
+                              <Badge key={t} variant="outline">
+                                {t}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {company.servicesOffered.length > 0 && (
+                        <div>
+                          <p className="mb-1.5 text-xs font-semibold text-foreground">Services offered</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {company.servicesOffered.map((t) => (
+                              <Badge key={t} variant="outline">
+                                {t}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {company.targetCustomers && (
+                        <div>
+                          <p className="mb-1 text-xs font-semibold text-foreground">Target customers</p>
+                          <p className="text-sm text-muted-foreground">{company.targetCustomers}</p>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {company.foundedYear && (
+                    <Card glass>
+                      <CardContent className="p-4">
+                        <p className="text-xs text-muted-foreground">Founded</p>
+                        <p className="text-lg font-semibold text-foreground">{company.foundedYear}</p>
+                      </CardContent>
+                    </Card>
+                  )}
+                  {company.estimatedRevenue != null && (
+                    <Card glass>
+                      <CardContent className="p-4">
+                        <p className="text-xs text-muted-foreground">Estimated revenue</p>
+                        <p className="text-lg font-semibold text-foreground">{formatCurrency(company.estimatedRevenue)}</p>
+                      </CardContent>
+                    </Card>
+                  )}
+                  {company.employeeCount != null && (
+                    <Card glass>
+                      <CardContent className="p-4">
+                        <p className="text-xs text-muted-foreground">Employees</p>
+                        <p className="text-lg font-semibold text-foreground">{company.employeeCount.toLocaleString()}</p>
+                      </CardContent>
+                    </Card>
+                  )}
+                  {company.growthRate != null && (
+                    <Card glass>
+                      <CardContent className="p-4">
+                        <p className="text-xs text-muted-foreground">Growth rate</p>
+                        <p className="text-lg font-semibold text-foreground">{company.growthRate}%</p>
+                      </CardContent>
+                    </Card>
+                  )}
+                </div>
+
+                {hasHQ && (
+                  <Card glass>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base">
+                        <MapPin className="size-4" /> Headquarters
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="flex flex-col gap-3 pt-0">
+                      <p className="text-sm text-muted-foreground">
+                        {[company.headquartersCity, company.headquartersState, company.headquartersCountry]
+                          .filter(Boolean)
+                          .join(", ")}
+                      </p>
+                      {company.latitude != null && company.longitude != null ? (
+                        <CompanyMap lat={company.latitude} lng={company.longitude} name={company.name} />
+                      ) : (
+                        <p className="text-xs text-muted-foreground">No map pin yet — not geocoded.</p>
+                      )}
+                      {company.googleMapsUrl && (
+                        <a
+                          href={company.googleMapsUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs text-primary hover:underline"
+                        >
+                          Open in Google Maps
+                        </a>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+
+                <CompanyEditForm
+                  companyId={company.id}
+                  canDelete={canDelete}
+                  initial={{
+                    name: company.name,
+                    industry: company.industry ?? "",
+                    website: company.website ?? "",
+                    email: company.email ?? "",
+                    phone: company.phone ?? "",
+                    address: company.address ?? "",
+                    employeeCount: company.employeeCount != null ? String(company.employeeCount) : "",
+                    notes: company.notes ?? "",
+                    status: company.status,
+                    logo: company.logo ?? "",
+                    description: company.description ?? "",
+                    headquartersCountry: company.headquartersCountry ?? "",
+                    headquartersState: company.headquartersState ?? "",
+                    headquartersCity: company.headquartersCity ?? "",
+                    estimatedRevenue: company.estimatedRevenue != null ? String(company.estimatedRevenue) : "",
+                    foundedYear: company.foundedYear != null ? String(company.foundedYear) : "",
+                    technologies: company.technologies.join(", "),
+                    products: company.products.join(", "),
+                    servicesOffered: company.servicesOffered.join(", "),
+                    targetCustomers: company.targetCustomers ?? "",
+                    linkedinUrl: socialLinks.linkedin ?? "",
+                    facebookUrl: socialLinks.facebook ?? "",
+                    twitterUrl: socialLinks.twitter ?? "",
+                    instagramUrl: socialLinks.instagram ?? "",
+                    googleMapsUrl: company.googleMapsUrl ?? "",
+                    contactFormUrl: company.contactFormUrl ?? "",
+                    businessType: company.businessType ?? "",
+                    remoteHybrid: company.remoteHybrid ?? "",
+                    publicPrivate: company.publicPrivate ?? "",
+                    growthRate: company.growthRate != null ? String(company.growthRate) : "",
+                    fundingStage: company.fundingStage ?? "",
+                    fundingAmount: company.fundingAmount != null ? String(company.fundingAmount) : "",
+                    language: company.language ?? "",
+                  }}
+                />
+              </div>
+
+              <div className="flex flex-col gap-4">
+                <CrmActionsPanel
+                  companyId={company.id}
+                  hasLead={company.leads.length > 0}
+                  ownerUserId={company.ownerUserId}
+                  priority={company.priority}
+                  members={members.map((m) => m.user)}
+                />
+
+                <Card glass>
+                  <CardHeader>
+                    <CardTitle className="text-base">Contact intelligence</CardTitle>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-2.5 pt-0 text-sm">
+                    <div className="flex items-center gap-2">
+                      <Globe className="size-3.5 shrink-0 text-muted-foreground" />
+                      {company.website ? (
+                        <a href={company.website} target="_blank" rel="noreferrer" className="truncate text-primary hover:underline">
+                          {company.website}
+                        </a>
+                      ) : (
+                        <span className="text-muted-foreground">Not available</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Mail className="size-3.5 shrink-0 text-muted-foreground" />
+                      {company.email ? <span className="truncate">{company.email}</span> : <span className="text-muted-foreground">Not available</span>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Phone className="size-3.5 shrink-0 text-muted-foreground" />
+                      {company.phone ? <span>{company.phone}</span> : <span className="text-muted-foreground">Not available</span>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <MessageSquare className="size-3.5 shrink-0 text-muted-foreground" />
+                      {company.contactFormUrl ? (
+                        <a href={company.contactFormUrl} target="_blank" rel="noreferrer" className="truncate text-primary hover:underline">
+                          Contact form
+                        </a>
+                      ) : (
+                        <span className="text-muted-foreground">Not available</span>
+                      )}
+                    </div>
+                    {(socialLinks.linkedin || socialLinks.facebook || socialLinks.twitter || socialLinks.instagram) && (
+                      <div className="flex flex-wrap items-center gap-3 pt-1">
+                        {socialLinks.linkedin && (
+                          <a
+                            href={socialLinks.linkedin}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary"
+                          >
+                            <Link2 className="size-3.5" /> LinkedIn
+                          </a>
+                        )}
+                        {socialLinks.facebook && (
+                          <a
+                            href={socialLinks.facebook}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary"
+                          >
+                            <Link2 className="size-3.5" /> Facebook
+                          </a>
+                        )}
+                        {socialLinks.twitter && (
+                          <a
+                            href={socialLinks.twitter}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary"
+                          >
+                            <Link2 className="size-3.5" /> Twitter / X
+                          </a>
+                        )}
+                        {socialLinks.instagram && (
+                          <a
+                            href={socialLinks.instagram}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary"
+                          >
+                            <Link2 className="size-3.5" /> Instagram
+                          </a>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <LeadScorePanel companyId={company.id} score={company.leadScore ? { ...company.leadScore, scoredAt: company.leadScore.scoredAt.toISOString() } : null} />
+
+                <Card glass>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Users2 className="size-4" /> Leads ({company.leads.length})
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-2 pt-0">
+                    {company.leads.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No leads linked yet.</p>
+                    ) : (
+                      company.leads.map((lead) => (
+                        <div key={lead.id} className="flex items-center justify-between text-sm">
+                          <span className="text-foreground">{lead.name}</span>
+                          {lead.estimatedValue != null && (
+                            <span className="text-xs text-muted-foreground">{formatCurrency(lead.estimatedValue)}</span>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card glass>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <FolderKanban className="size-4" /> Projects ({company.projects.length})
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-2 pt-0">
+                    {company.projects.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No projects linked yet.</p>
+                    ) : (
+                      company.projects.map((project) => (
+                        <Link key={project.id} href={`/dashboard/projects/${project.id}`} className="flex items-center justify-between text-sm hover:text-primary">
+                          <span>{project.name}</span>
+                          <Badge variant="outline">{project.status}</Badge>
+                        </Link>
+                      ))
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card glass>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <FileText className="size-4" /> Proposals ({company.proposals.length})
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-2 pt-0">
+                    {company.proposals.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No proposals linked yet.</p>
+                    ) : (
+                      company.proposals.map((proposal) => (
+                        <Link key={proposal.id} href={`/dashboard/proposal/proposals/${proposal.id}`} className="flex items-center justify-between text-sm hover:text-primary">
+                          <span className="truncate">{proposal.title}</span>
+                          <Badge variant="outline">{proposal.status}</Badge>
+                        </Link>
+                      ))
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="intelligence">
+            <CompanyIntelligencePanel
+              companyId={company.id}
+              latestReport={
+                latestReport
+                  ? {
+                      ...latestReport,
+                      createdAt: latestReport.createdAt.toISOString(),
+                    }
+                  : null
+              }
+              notes={company.researchNotes.map((n) => ({ ...n, createdAt: n.createdAt.toISOString() }))}
+            />
+          </TabsContent>
+
+          <TabsContent value="timeline">
+            <CompanyTimeline
+              events={company.timelineEvents.map((e) => ({ ...e, occurredAt: e.occurredAt.toISOString() }))}
+            />
+          </TabsContent>
+        </Tabs>
+      </Container>
+    </main>
+  );
+}

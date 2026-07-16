@@ -1,0 +1,60 @@
+name: Load test (k6)
+
+# STAGING-ONLY, MANUAL-ONLY. This workflow deliberately has no `push`/
+# `pull_request` trigger — it never runs automatically. A k6 load test
+# throws real, sustained traffic (see scripts/load-test.js's ramping-VU
+# profile: up to 50 concurrent VUs) at a real target URL, so it must only
+# ever run against an environment you deliberately intend to load — never
+# against production as a side effect of a routine push, and never
+# unattended. Trigger it by hand (Actions tab -> "Load test (k6)" -> "Run
+# workflow") and type in the real staging URL you want to hit.
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: "Base URL to load-test (e.g. a real staging deployment) — never point this at production"
+        required: true
+        type: string
+      confirm_not_production:
+        description: "Type \"staging\" to confirm target_url is NOT a production environment"
+        required: true
+        type: string
+
+jobs:
+  guard:
+    name: Confirm non-production target
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse to proceed without an explicit non-production confirmation
+        if: inputs.confirm_not_production != 'staging'
+        run: |
+          echo "::error::confirm_not_production must be exactly \"staging\" — refusing to run a load test without an explicit confirmation this isn't production." >&2
+          exit 1
+
+  load-test:
+    name: Run k6 against ${{ inputs.target_url }}
+    runs-on: ubuntu-latest
+    needs: guard
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Run scripts/load-test.js
+        env:
+          BASE_URL: ${{ inputs.target_url }}
+        run: k6 run -e BASE_URL="$BASE_URL" scripts/load-test.js
+
+      - name: Upload k6 summary (if produced)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-summary
+          path: |
+            summary.json
+            summary.html
+          retention-days: 14
+          if-no-files-found: ignore

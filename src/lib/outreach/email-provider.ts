@@ -1,0 +1,197 @@
+/**
+ * Real outbound email for the Outreach Assistant — deliberately NOT built on
+ * top of src/lib/email.ts's sendEmail(), because that function's contract is
+ * fire-and-forget (never throws, never reports whether a real send actually
+ * happened — it just logs and returns void when EMAIL_SERVER is unset). A
+ * customer-facing cold email needs an honest tri-state: sent for real,
+ * genuinely failed, or not configured — an EmailDraft must never be marked
+ * SENT when nothing left the building.
+ *
+ * Four real providers, each only active when actually configured — same
+ * "only register what's configured" convention as the OAuth providers in
+ * src/auth.ts:
+ *  1. Gmail (org has a CONNECTED GOOGLE_GMAIL integration) — a real fetch to
+ *     the Gmail API, sending as the org's own connected mailbox.
+ *  2. Outlook (org has a CONNECTED MICROSOFT_OUTLOOK integration) — a real
+ *     fetch to Microsoft Graph, same idea.
+ *  3. Resend (RESEND_API_KEY) — a real fetch to the Resend REST API.
+ *  4. SMTP (EMAIL_SERVER) — a real nodemailer transport, same connection
+ *     string convention as sendEmail()'s existing EMAIL_SERVER contract.
+ */
+
+import { getConnection, getFreshAccessToken } from "@/lib/integrations/connection-store";
+import { recordAPIUsage } from "@/lib/api-usage";
+
+export interface OutreachEmailInput {
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+}
+
+export type OutreachEmailResult =
+  | { ok: true; providerMessageId?: string }
+  | { ok: false; errorKind: "not_configured" | "failed"; error: string };
+
+export function isEmailSendingConfigured(): boolean {
+  return Boolean(process.env.RESEND_API_KEY || process.env.EMAIL_SERVER);
+}
+
+async function sendViaResend(input: OutreachEmailInput): Promise<OutreachEmailResult> {
+  try {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: process.env.EMAIL_FROM ?? "no-reply@kvlgrowthos.local",
+        to: input.to,
+        subject: input.subject,
+        html: input.html,
+        text: input.text,
+      }),
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      return { ok: false, errorKind: "failed", error: `Resend rejected the send (HTTP ${response.status}): ${body.slice(0, 200)}` };
+    }
+    const body = (await response.json().catch(() => null)) as { id?: string } | null;
+    return { ok: true, providerMessageId: typeof body?.id === "string" ? body.id : undefined };
+  } catch (error) {
+    return { ok: false, errorKind: "failed", error: error instanceof Error ? error.message : "Resend request failed." };
+  }
+}
+
+async function sendViaSmtp(input: OutreachEmailInput): Promise<OutreachEmailResult> {
+  try {
+    const nodemailer = await import("nodemailer");
+    const transport = nodemailer.createTransport(process.env.EMAIL_SERVER!);
+    await transport.sendMail({
+      to: input.to,
+      from: process.env.EMAIL_FROM ?? "no-reply@kvlgrowthos.local",
+      subject: input.subject,
+      html: input.html,
+      text: input.text,
+    });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, errorKind: "failed", error: error instanceof Error ? error.message : "SMTP send failed." };
+  }
+}
+
+async function sendViaGmail(
+  organizationId: string,
+  connectionId: string | undefined,
+  accessToken: string,
+  input: OutreachEmailInput,
+): Promise<OutreachEmailResult> {
+  const endpoint = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
+  try {
+    const message = [`To: ${input.to}`, `Subject: ${input.subject}`, "Content-Type: text/html; charset=utf-8", "", input.html].join("\r\n");
+    const raw = Buffer.from(message).toString("base64url");
+
+    const start = Date.now();
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ raw }),
+    });
+    void recordAPIUsage({
+      organizationId,
+      integrationConnectionId: connectionId,
+      endpoint,
+      method: "POST",
+      statusCode: response.status,
+      responseTimeMs: Date.now() - start,
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      return { ok: false, errorKind: "failed", error: `Gmail rejected the send (HTTP ${response.status}): ${body.slice(0, 200)}` };
+    }
+    const body = (await response.json().catch(() => null)) as { id?: string } | null;
+    return { ok: true, providerMessageId: typeof body?.id === "string" ? body.id : undefined };
+  } catch (error) {
+    return { ok: false, errorKind: "failed", error: error instanceof Error ? error.message : "Gmail request failed." };
+  }
+}
+
+async function sendViaOutlook(
+  organizationId: string,
+  connectionId: string | undefined,
+  accessToken: string,
+  input: OutreachEmailInput,
+): Promise<OutreachEmailResult> {
+  const endpoint = "https://graph.microsoft.com/v1.0/me/sendMail";
+  try {
+    const start = Date.now();
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: {
+          subject: input.subject,
+          body: { contentType: "HTML", content: input.html },
+          toRecipients: [{ emailAddress: { address: input.to } }],
+        },
+      }),
+    });
+    void recordAPIUsage({
+      organizationId,
+      integrationConnectionId: connectionId,
+      endpoint,
+      method: "POST",
+      statusCode: response.status,
+      responseTimeMs: Date.now() - start,
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      return { ok: false, errorKind: "failed", error: `Outlook rejected the send (HTTP ${response.status}): ${body.slice(0, 200)}` };
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, errorKind: "failed", error: error instanceof Error ? error.message : "Outlook request failed." };
+  }
+}
+
+/**
+ * Sends a real outreach email. Returns `not_configured` honestly rather than
+ * pretending success — never marks a draft SENT for nothing.
+ *
+ * Provider order: Gmail, then Outlook, then Resend, then SMTP. An org's own
+ * connected mailbox (Gmail/Outlook) is preferred over the shared Resend
+ * sender/SMTP relay because it sends from the org's real address — better
+ * deliverability and sender reputation than a shared box, and the recipient
+ * sees a familiar "from" address. Falling through to the next provider only
+ * happens when the current one isn't CONFIGURED (getFreshAccessToken/env var
+ * missing) — a connected provider that genuinely fails to send returns that
+ * failure honestly instead of silently retrying through the list.
+ */
+export async function sendOutreachEmail(organizationId: string, input: OutreachEmailInput): Promise<OutreachEmailResult> {
+  const gmailToken = await getFreshAccessToken(organizationId, "GOOGLE_GMAIL");
+  if (gmailToken) {
+    const gmailConnection = await getConnection(organizationId, "GOOGLE_GMAIL");
+    return sendViaGmail(organizationId, gmailConnection?.id, gmailToken, input);
+  }
+
+  const outlookToken = await getFreshAccessToken(organizationId, "MICROSOFT_OUTLOOK");
+  if (outlookToken) {
+    const outlookConnection = await getConnection(organizationId, "MICROSOFT_OUTLOOK");
+    return sendViaOutlook(organizationId, outlookConnection?.id, outlookToken, input);
+  }
+
+  if (process.env.RESEND_API_KEY) return sendViaResend(input);
+  if (process.env.EMAIL_SERVER) return sendViaSmtp(input);
+  return {
+    ok: false,
+    errorKind: "not_configured",
+    error: "Email sending isn't configured for this environment yet — connect Gmail/Outlook, or set RESEND_API_KEY or EMAIL_SERVER to send real outreach email.",
+  };
+}

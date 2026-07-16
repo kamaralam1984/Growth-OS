@@ -1,0 +1,50 @@
+# GitHub's own CodeQL analysis template (Code -> Security -> Set up code
+# scanning -> CodeQL -> "Default" or the equivalent Advanced workflow),
+# adapted to this repo's single-language (JavaScript/TypeScript) codebase.
+# No build step is required for the javascript-typescript language — CodeQL
+# analyzes source directly, so this deliberately does NOT run `npm ci`/
+# `npm run build` (keeping this workflow independent of DATABASE_URL/Redis
+# service containers that ci.yml needs).
+name: "CodeQL"
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    # Weekly, in addition to every push/PR — catches new CodeQL query-pack
+    # advisories against code that hasn't changed recently.
+    - cron: "23 4 * * 1"
+
+jobs:
+  analyze:
+    name: Analyze (javascript-typescript)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            build-mode: none
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{matrix.language}}"

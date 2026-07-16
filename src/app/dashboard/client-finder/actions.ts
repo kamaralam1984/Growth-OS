@@ -1,0 +1,179 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+
+import { auth } from "@/auth";
+import { prisma } from "@/lib/prisma";
+import { logActivity } from "@/lib/activity";
+import { logAudit } from "@/lib/audit";
+import { checkRateLimit } from "@/lib/rate-limit";
+import { AINotConnectedError, AIBillingError, isAIBillingError } from "@/lib/ai/client";
+import { runWebSearchDiscovery, type DiscoveredCompany } from "@/lib/ai/agent-runtime";
+import {
+  discoveryQuerySchema,
+  discoveryFiltersSchema,
+  discoveredCompanyListSchema,
+  describeFilters,
+  type DiscoveryFilters,
+} from "@/lib/validations/discovery";
+import { addCompanyTimelineEvent } from "@/lib/company-intelligence";
+import { scoreCompany } from "@/lib/lead-scoring";
+
+export interface ActionResult {
+  ok: boolean;
+  error?: string;
+  errorKind?: "not_connected" | "billing" | "generic";
+}
+
+export interface SearchClientsResult extends ActionResult {
+  companies?: DiscoveredCompany[];
+}
+
+export interface SaveClientsResult extends ActionResult {
+  savedCount?: number;
+}
+
+function describeAIError(error: unknown): ActionResult {
+  if (error instanceof AINotConnectedError) {
+    return {
+      ok: false,
+      errorKind: "not_connected",
+      error: "AI is not connected — no ANTHROPIC_API_KEY is configured for this environment.",
+    };
+  }
+  if (error instanceof AIBillingError || isAIBillingError(error)) {
+    return {
+      ok: false,
+      errorKind: "billing",
+      error: "AI is connected but the account has no API credits — add credits at console.anthropic.com/settings/billing.",
+    };
+  }
+  console.error("[client-finder] AI call failed:", error);
+  return { ok: false, errorKind: "generic", error: "Something went wrong searching the web. Please try again." };
+}
+
+async function resolveActiveMembership(userId: string) {
+  return prisma.membership.findFirst({
+    where: { userId, status: "ACTIVE" },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
+/** Runs a real, live web-search-backed ideal-client search via the org's Sales agent. */
+export async function searchClients(query: string, filters?: Partial<DiscoveryFilters>): Promise<SearchClientsResult> {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) return { ok: false, error: "You must be signed in." };
+
+  const parsedQuery = discoveryQuerySchema.safeParse(query);
+  if (!parsedQuery.success) {
+    return { ok: false, error: parsedQuery.error.issues[0]?.message ?? "Enter what you're looking for." };
+  }
+  const parsedFilters = discoveryFiltersSchema.partial().safeParse(filters ?? {});
+
+  const membership = await resolveActiveMembership(userId);
+  if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
+
+  if (!checkRateLimit(`client-finder:${userId}`, { limit: 15, windowMs: 5 * 60_000 }).allowed) {
+    return { ok: false, errorKind: "generic", error: "Too many searches — wait a few minutes and try again." };
+  }
+
+  const agent = await prisma.aIAgentInstance.findUnique({
+    where: { organizationId_type: { organizationId: membership.organizationId, type: "SALES" } },
+  });
+  if (!agent) return { ok: false, error: "Your Sales agent isn't set up yet." };
+
+  try {
+    const result = await runWebSearchDiscovery({
+      agentId: agent.id,
+      agentType: "SALES",
+      agentName: agent.name,
+      query: parsedQuery.data,
+      resultKind: "client",
+      filtersDescription: parsedFilters.success ? describeFilters(parsedFilters.data) || undefined : undefined,
+    });
+
+    await logActivity({
+      organizationId: membership.organizationId,
+      type: "SYSTEM_EVENT",
+      description: `${session.user?.name ?? "A team member"} searched Client Finder: "${parsedQuery.data}".`,
+      actorUserId: userId,
+      metadata: { searchKind: "client", query: parsedQuery.data, filters: parsedFilters.success ? parsedFilters.data : {} },
+    });
+
+    return { ok: true, companies: result.companies };
+  } catch (error) {
+    return describeAIError(error);
+  }
+}
+
+/** Saves the user's approved subset of AI-found companies as real Company + Client rows. */
+export async function saveDiscoveredClients(companies: DiscoveredCompany[]): Promise<SaveClientsResult> {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) return { ok: false, error: "You must be signed in." };
+
+  const parsed = discoveredCompanyListSchema.safeParse(companies);
+  if (!parsed.success || parsed.data.length === 0) {
+    return { ok: false, error: "Select at least one company to save." };
+  }
+
+  const membership = await resolveActiveMembership(userId);
+  if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
+  const organizationId = membership.organizationId;
+
+  try {
+    let savedCount = 0;
+    for (const item of parsed.data) {
+      const company = await prisma.company.create({
+        data: {
+          organizationId,
+          name: item.name,
+          website: item.website || null,
+          industry: item.industry || null,
+          email: item.email || null,
+          phone: item.phone || null,
+          notes: item.reason || null,
+          source: "CLIENT_FINDER",
+          status: "PROSPECT",
+        },
+      });
+      await prisma.client.create({
+        data: {
+          organizationId,
+          companyId: company.id,
+          name: item.name,
+          email: item.email || null,
+          phone: item.phone || null,
+          status: "ACTIVE",
+        },
+      });
+      await addCompanyTimelineEvent({
+        companyId: company.id,
+        type: "CREATED",
+        title: `${company.name} discovered via Client Finder`,
+        description: item.reason || null,
+        source: "AI_RESEARCH",
+      });
+      await scoreCompany(company.id);
+      savedCount += 1;
+    }
+
+    await logActivity({
+      organizationId,
+      type: "SYSTEM_EVENT",
+      description: `${session.user?.name ?? "A team member"} saved ${savedCount} prospective client${savedCount === 1 ? "" : "s"} found by Client Finder.`,
+      actorUserId: userId,
+      metadata: { count: savedCount },
+    });
+    await logAudit({ userId, organizationId, action: "client_finder.clients_saved", metadata: { count: savedCount } });
+
+    revalidatePath("/dashboard/client-finder");
+    revalidatePath("/dashboard/companies");
+    revalidatePath("/dashboard/crm");
+    return { ok: true, savedCount };
+  } catch (error) {
+    console.error("[client-finder] saveDiscoveredClients failed:", error);
+    return { ok: false, errorKind: "generic", error: "Something went wrong saving these clients. Please try again." };
+  }
+}

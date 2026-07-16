@@ -1,0 +1,126 @@
+import { Webhook } from "svix";
+
+import { NextResponse } from "next/server";
+
+import { prisma } from "@/lib/prisma";
+import { logActivity } from "@/lib/activity";
+
+// Resend outbound-email lifecycle webhook receiver. Resend signs webhook
+// deliveries via Svix (svix-id/svix-timestamp/svix-signature headers), with
+// a per-endpoint secret ("whsec_...") issued when the webhook is created in
+// the Resend dashboard. Verify this payload shape (event `type` values,
+// `data.email_id`, `data.bounce`/`data.complaint` field paths) against
+// Resend's current webhook docs (resend.com/docs/dashboard/webhooks/event-types)
+// before relying on this in production — written from stable, well-known
+// conventions without live doc access in this session.
+function verifySignature(rawBody: string, headers: Headers): boolean {
+  const secret = process.env.RESEND_WEBHOOK_SECRET;
+  if (!secret) {
+    console.warn("[webhooks/resend] RESEND_WEBHOOK_SECRET not set — accepting payload WITHOUT signature verification.");
+    return true;
+  }
+  const svixId = headers.get("svix-id");
+  const svixTimestamp = headers.get("svix-timestamp");
+  const svixSignature = headers.get("svix-signature");
+  if (!svixId || !svixTimestamp || !svixSignature) return false;
+  try {
+    new Webhook(secret).verify(rawBody, {
+      "svix-id": svixId,
+      "svix-timestamp": svixTimestamp,
+      "svix-signature": svixSignature,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function POST(request: Request) {
+  const rawBody = await request.text();
+
+  if (!verifySignature(rawBody, request.headers)) {
+    console.error("[webhooks/resend] signature verification failed — rejecting.");
+    return NextResponse.json({ error: "Invalid signature." }, { status: 401 });
+  }
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON." }, { status: 400 });
+  }
+
+  try {
+    const type = extractType(payload);
+    const emailId = extractEmailId(payload);
+
+    if (!emailId || (type !== "email.bounced" && type !== "email.complained")) {
+      return NextResponse.json({ ok: true, skipped: true });
+    }
+
+    const draft = await prisma.emailDraft.findUnique({ where: { resendMessageId: emailId } });
+    if (!draft) {
+      console.warn(`[webhooks/resend] no EmailDraft for resendMessageId ${emailId} — ignoring.`);
+      return NextResponse.json({ ok: true, skipped: true });
+    }
+
+    if (type === "email.bounced") {
+      const bounceReason = extractBounceReason(payload);
+      await prisma.emailDraft.update({
+        where: { id: draft.id },
+        data: { status: "BOUNCED", bouncedAt: new Date(), bounceReason },
+      });
+      await logActivity({
+        organizationId: draft.organizationId,
+        type: "SYSTEM_EVENT",
+        description: `Email bounced (Resend message ${emailId}): ${bounceReason}`,
+        metadata: { emailDraftId: draft.id, provider: "RESEND", resendMessageId: emailId },
+      });
+    } else {
+      await prisma.emailDraft.update({
+        where: { id: draft.id },
+        data: { complainedAt: new Date() },
+      });
+      await logActivity({
+        organizationId: draft.organizationId,
+        type: "SYSTEM_EVENT",
+        description: `Spam complaint received (Resend message ${emailId}).`,
+        metadata: { emailDraftId: draft.id, provider: "RESEND", resendMessageId: emailId },
+      });
+    }
+  } catch (error) {
+    console.error("[webhooks/resend] processing failed:", error);
+    // Still 200 — Resend/Svix retries on non-2xx and we've already logged the real failure.
+  }
+
+  return NextResponse.json({ ok: true });
+}
+
+function extractType(payload: unknown): string | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  const type = (payload as Record<string, unknown>).type;
+  return typeof type === "string" ? type : null;
+}
+
+function extractEmailId(payload: unknown): string | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  const data = (payload as Record<string, unknown>).data;
+  if (typeof data !== "object" || data === null) return null;
+  const emailId = (data as Record<string, unknown>).email_id;
+  return typeof emailId === "string" ? emailId : null;
+}
+
+function extractBounceReason(payload: unknown): string {
+  const fallback = "Email bounced (no further detail provided by Resend).";
+  if (typeof payload !== "object" || payload === null) return fallback;
+  const data = (payload as Record<string, unknown>).data;
+  if (typeof data !== "object" || data === null) return fallback;
+  const bounce = (data as Record<string, unknown>).bounce;
+  if (typeof bounce === "object" && bounce !== null) {
+    const message = (bounce as Record<string, unknown>).message;
+    if (typeof message === "string" && message.length > 0) return message;
+  }
+  const reason = (data as Record<string, unknown>).reason;
+  if (typeof reason === "string" && reason.length > 0) return reason;
+  return fallback;
+}

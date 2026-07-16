@@ -1,0 +1,5752 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================= Auth.js core =============================
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  firstName     String?
+  lastName      String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?
+
+  phone    String?
+  country  String?
+  language String?
+  timezone String?
+  jobTitle String?
+
+  twoFactorEnabled Boolean @default(false)
+  twoFactorSecret  String?
+
+  // Persistent lockout — distinct from the in-memory rolling rate limiter in
+  // src/lib/rate-limit.ts. That limiter throttles attempts per email+IP and
+  // resets on process restart; this is a real, durable lock independent of
+  // which IP is attempting, cleared only after lockedUntil elapses or a
+  // successful sign-in.
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+
+  // Set to now() by "Logout everywhere" (src/app/profile/actions.ts,
+  // signOutAllDevices). Because this app uses stateless JWT sessions
+  // (session.strategy === "jwt" in src/auth.ts), an already-issued JWT
+  // can't be revoked server-side by deleting a row — the jwt() callback
+  // instead compares this timestamp against the token's own signedInAt
+  // claim on every request and rejects (forces re-auth) any token minted
+  // before it. Null means the account has never had a mass logout.
+  sessionInvalidatedAt DateTime?
+
+  onboardingCompletedAt DateTime?
+
+  // Phase 18: a platform-operator identity distinct from any organization's
+  // own OWNER/ADMIN role — gates the cross-tenant Admin Billing Dashboard
+  // (MRR/ARR/churn across every organization). Never settable via any
+  // organization-scoped action; only ever flipped directly in the database
+  // by whoever operates this deployment.
+  isPlatformOwner Boolean @default(false)
+
+  accounts              Account[]
+  sessions              Session[]
+  deviceSessions        DeviceSession[]
+  authenticators        Authenticator[]
+  tokens                UserToken[]
+  apiKeys               ApiKey[]
+  memberships           Membership[]
+  sentInvitations       Invitation[]            @relation("InvitationSender")
+  auditLogs             AuditLog[]
+  connectedIntegrations IntegrationConnection[]
+  preference            UserPreference?
+
+  createdMeetings           Meeting[]
+  meetingParticipation      MeetingParticipant[]
+  meetingMessages           MeetingMessage[]
+  tasksAssignedByMe         Task[]               @relation("TaskAssignedByUser")
+  tasksAssignedToMe         Task[]               @relation("TaskAssignedToUser")
+  notifications             Notification[]
+  activities                Activity[]
+  dashboards                Dashboard[]
+  createdDashboardTemplates DashboardTemplate[]  @relation("DashboardTemplateCreatedBy")
+
+  ownedProjects                Project[]                 @relation("ProjectOwner")
+  createdProposals             Proposal[]                @relation("ProposalCreatedBy")
+  uploadedDocuments            Document[]                @relation("DocumentUploadedBy")
+  createdArticles              KnowledgeArticle[]        @relation("ArticleCreatedBy")
+  articleVersionsEdited        KnowledgeArticleVersion[] @relation("KnowledgeArticleVersionEditor")
+  knowledgeAttachmentsUploaded KnowledgeAttachment[]     @relation("KnowledgeAttachmentUploader")
+  ingestedDocumentsUploaded    IngestedDocument[]        @relation("IngestedDocumentUploader")
+  searchHistory                SearchHistory[]
+  bookmarks                    Bookmark[]
+  marketplaceInterests         MarketplaceInterest[]     @relation("MarketplaceInterestUser")
+  ownedCompanies               Company[]                 @relation("CompanyOwner")
+  createdWatchlists            Watchlist[]
+  watchlistAdditions           WatchlistCompany[]
+  savedSearches                SavedSearch[]
+  websiteScansCreated          WebsiteScan[]
+  ownedContacts                Contact[]                 @relation("ContactOwner")
+  createdCampaigns             Campaign[]
+  approvedEmailDrafts          EmailDraft[]              @relation("EmailDraftApprovedBy")
+  approvalDecisions            Approval[]
+  loggedReplies                Reply[]
+
+  ownedDeals Deal[]     @relation("DealOwner")
+  reminders  Reminder[]
+
+  createdQuotations        Quotation[]        @relation("QuotationCreatedBy")
+  createdContracts         Contract[]         @relation("ContractCreatedBy")
+  createdInvoices          Invoice[]          @relation("InvoiceCreatedBy")
+  createdBusinessDocuments BusinessDocument[] @relation("BusinessDocumentCreatedBy")
+  createdDocumentTemplates DocumentTemplate[] @relation("DocumentTemplateCreatedBy")
+  documentVersionsChanged  DocumentVersion[]  @relation("DocumentVersionChangedBy")
+  signaturesRequested      Signature[]        @relation("SignatureRequestedBy")
+
+  boardReviewsRequested  BoardReview[]                @relation("BoardReviewRequestedBy")
+  boardReviewsOverridden BoardReview[]                @relation("BoardReviewOverriddenBy")
+  approvalPolicyUpdates  OrganizationApprovalPolicy[]
+
+  projectMemberships ProjectMember[]
+  timeEntries        TimeEntry[]
+  comments           Comment[]
+  deliveryReports    DeliveryReport[]
+  partner            Partner?
+  securityEvents     SecurityEvent[]
+  deployments        Deployment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// The Auth.js Prisma adapter's expected shape for WebAuthn/passkey
+// credentials (credentialID/providerAccountId/etc. naming is fixed by the
+// adapter contract, not a stylistic choice).
+model Authenticator {
+  credentialID         String  @unique
+  userId               String
+  providerAccountId    String
+  credentialPublicKey  String
+  counter              Int
+  credentialDeviceType String
+  credentialBackedUp   Boolean
+  transports           String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, credentialID])
+}
+
+enum UserTokenPurpose {
+  PASSWORD_RESET
+  EMAIL_VERIFICATION
+}
+
+// Single-use, hashed-at-rest tokens for "prove you own this email" flows —
+// mirrors ClientAuthToken's real pattern (src/lib/client-portal/tokens.ts)
+// applied to main-app Users instead of client-portal users.
+model UserToken {
+  id         String           @id @default(cuid())
+  userId     String
+  purpose    UserTokenPurpose
+  tokenHash  String           @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+}
+
+// Real, user-generated API keys for programmatic access — the key itself is
+// shown once at creation time and only its SHA-256 hash + a short display
+// prefix are ever persisted.
+model ApiKey {
+  id             String    @id @default(cuid())
+  organizationId String
+  userId         String
+  name           String
+  prefix         String
+  hashedKey      String    @unique
+  lastUsedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  // Closed set of permission strings this key is allowed to use — see
+  // API_KEY_SCOPES in src/lib/auth/api-key-scopes.ts for the authoritative
+  // list and per-scope descriptions. Empty means the key can authenticate
+  // but is not granted any scoped capability.
+  scopes           String[] @default([])
+  // Requests/hour enforced per-key by checkApiKeyRateLimit (src/lib/auth/api-key.ts)
+  // via the in-memory limiter in src/lib/rate-limit.ts.
+  rateLimitPerHour Int      @default(1000)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([userId])
+}
+
+// Independent of Auth.js's own Session table — populated on every successful
+// sign-in (any provider) purely to power the "active devices / device history"
+// UI. Not used for request authentication.
+model DeviceSession {
+  id           String   @id @default(cuid())
+  userId       String
+  ipAddress    String?
+  userAgent    String?
+  deviceName   String?
+  trusted      Boolean  @default(false)
+  lastActiveAt DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  // Real composite client-side fingerprint (SHA-256 of timezone + screen
+  // resolution + platform + hardwareConcurrency, collected by
+  // src/lib/device-fingerprint.ts and submitted via a Server Action once per
+  // session) — a stronger "is this the same physical device" signal than the
+  // existing userId+userAgent heuristic alone, since a User-Agent string is
+  // identical across every install of the same browser/OS combination. Kept
+  // alongside, not instead of, that heuristic: this column is best-effort
+  // (nullable) because it requires client-side JS to run before it's known,
+  // and is never treated as a stronger identity check than the sign-in
+  // itself, only as an additional device-matching signal.
+  fingerprintHash String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([fingerprintHash])
+}
+
+model UserPreference {
+  id                   String  @id @default(cuid())
+  userId               String  @unique
+  theme                String  @default("dark")
+  locale               String  @default("en")
+  emailNotifications   Boolean @default(true)
+  browserNotifications Boolean @default(true)
+  slackNotifications   Boolean @default(false)
+  teamsNotifications   Boolean @default(false)
+  slackWebhookUrl      String?
+  teamsWebhookUrl      String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ======================= Organizations / multi-tenancy =======================
+
+enum CompanySize {
+  SIZE_1_10
+  SIZE_11_50
+  SIZE_51_200
+  SIZE_201_1000
+  SIZE_1000_PLUS
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MANAGER
+  SALES
+  MARKETING
+  DEVELOPER
+  SUPPORT
+  FINANCE
+  HR
+  VIEWER
+  AI_AGENT
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+model Organization {
+  id   String @id @default(cuid())
+  slug String @unique
+
+  name               String
+  logo               String?
+  banner             String?
+  industry           String?
+  website            String?
+  email              String?
+  phone              String?
+  gstNumber          String?
+  registrationNumber String?
+  linkedin           String?
+  facebook           String?
+  twitter            String?
+  description        String?  @db.Text
+  mission            String?  @db.Text
+  vision             String?  @db.Text
+  values             String[]
+
+  companySize     CompanySize?
+  annualRevenue   String?
+  primaryMarket   String?
+  countriesServed String[]
+  primaryLanguage String?
+  currency        String?
+  timezone        String?
+
+  services    String[]
+  clientTypes String[]
+  aiGoals     String[]
+
+  // Tracks progress through the /onboarding wizard so a returning user can be
+  // resumed on the right step and so "jump to a previously-completed step"
+  // navigation can be gated. 0 = just created (no step saved yet), 1 =
+  // company profile saved, 2 = business details saved, 3 = services & goals
+  // saved (wizard complete, ready to hand off to the AI-agent intro step).
+  onboardingStep Int @default(0)
+
+  workingHours    Json?
+  officeLocations Json?
+  certificates    Json?
+  awards          Json?
+
+  // Phase 18: Agency Reseller Portal — an agency organization creates and
+  // manages child tenant organizations under it (real parent/child, not a
+  // membership/role trick). `isAgency` gates the Agency Portal UI itself;
+  // `parentAgencyOrganizationId` is null for a normal, independent tenant.
+  isAgency                   Boolean @default(false)
+  parentAgencyOrganizationId String?
+  // Phase 18: which Partner (if any) referred this organization, for
+  // reseller commission tracking.
+  referredByPartnerId        String?
+  caseStudies                Json?
+  portfolio                  Json?
+
+  memberships Membership[]
+  invitations Invitation[]
+  workspace   Workspace?
+  aiAgents    AIAgentInstance[]
+  auditLogs   AuditLog[]
+
+  meetings           Meeting[]
+  tasks              Task[]
+  decisions          Decision[]
+  agentMemories      AgentMemory[]
+  agentConversations AgentConversation[]
+  notifications      Notification[]
+  activities         Activity[]
+  dashboards         Dashboard[]
+  dashboardTemplates DashboardTemplate[]
+  insights           Insight[]
+
+  companies            Company[]
+  clients              Client[]
+  projects             Project[]
+  proposals            Proposal[]
+  documents            Document[]
+  automationRules      AutomationRule[]
+  billingAccount       BillingAccount?
+  metricSnapshots      MetricSnapshot[]
+  marketplaceInterests MarketplaceInterest[]
+  watchlists           Watchlist[]
+  savedSearches        SavedSearch[]
+  recommendations      Recommendation[]
+  websiteScans         WebsiteScan[]
+  contacts             Contact[]
+  campaigns            Campaign[]
+  sequences            Sequence[]
+  emailDrafts          EmailDraft[]
+  approvals            Approval[]
+  replies              Reply[]
+  outreachMeetings     OutreachMeeting[]
+
+  deals     Deal[]
+  reminders Reminder[]
+
+  quotations        Quotation[]
+  contracts         Contract[]
+  invoices          Invoice[]
+  businessDocuments BusinessDocument[]
+  documentTemplates DocumentTemplate[]
+  documentVersions  DocumentVersion[]
+  signatures        Signature[]
+
+  boardReviews   BoardReview[]
+  approvalPolicy OrganizationApprovalPolicy?
+
+  projectMembers         ProjectMember[]
+  sprints                Sprint[]
+  projectRisks           ProjectRisk[]
+  timeEntries            TimeEntry[]
+  taskStatusChanges      TaskStatusChange[]
+  comments               Comment[]
+  clientPortalUsers      ClientPortalUser[]
+  projectHealthSnapshots ProjectHealthSnapshot[]
+  deliveryReports        DeliveryReport[]
+  apiKeys                ApiKey[]
+  integrationConnections IntegrationConnection[]
+  projectFiles           ProjectFile[]
+  actionItems            ActionItem[]
+  bugReports             BugReport[]
+  alerts                 Alert[]
+  subscriptions          Subscription[]
+  expenseEntries         ExpenseEntry[]
+  workflows              Workflow[]
+  eventLogs              EventLog[]
+  secrets                Secret[]
+  apiUsageRecords        APIUsage[]
+  webhooks               Webhook[]
+  knowledgeCategories    KnowledgeCategory[]
+  knowledgeTags          KnowledgeTag[]
+  ingestedDocuments      IngestedDocument[]
+  embeddings             Embedding[]
+  knowledgeGraphNodes    KnowledgeGraphNode[]
+  relationships          Relationship[]
+  citations              Citation[]
+  searchHistory          SearchHistory[]
+  bookmarks              Bookmark[]
+  agentMemoryEvents      AgentMemoryEvent[]
+
+  // Phase 18: Subscription/Billing/White Label/Reseller Platform
+  platformInvoices           PlatformInvoice[]
+  platformPayments           PlatformPayment[]
+  usageRecords               UsageRecord[]
+  aiUsageEvents              AIUsageEvent[]
+  licenses                   License[]
+  whiteLabelSettings         WhiteLabelSettings?
+  featureOverrides           OrganizationFeatureOverride[]
+  parentAgencyOrganization   Organization?                 @relation("AgencyChildren", fields: [parentAgencyOrganizationId], references: [id], onDelete: SetNull)
+  agencyManagedOrganizations Organization[]                @relation("AgencyChildren")
+  referredByPartner          Partner?                      @relation("ReferredByPartner", fields: [referredByPartnerId], references: [id], onDelete: SetNull)
+  securityEvents             SecurityEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Membership {
+  id             String           @id @default(cuid())
+  userId         String
+  organizationId String
+  role           MembershipRole
+  status         MembershipStatus @default(ACTIVE)
+  invitedAt      DateTime?
+  joinedAt       DateTime         @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  // The `{ organizationId, status: "ACTIVE" }` filter is the single most
+  // common Membership query in this codebase (40+ call sites — every
+  // requireActiveMembership-style access check, roster page, and
+  // notification fan-out), but the lone `@@index([organizationId])` above
+  // only covers the first column; Postgres still has to visit every row for
+  // that org and re-check status in a Filter step. This composite index
+  // covers the real, verified query shape directly.
+  @@index([organizationId, status])
+}
+
+model Invitation {
+  id             String           @id @default(cuid())
+  email          String
+  organizationId String
+  role           MembershipRole
+  token          String           @unique
+  status         InvitationStatus @default(PENDING)
+  invitedById    String
+  expiresAt      DateTime
+  createdAt      DateTime         @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invitedBy    User         @relation("InvitationSender", fields: [invitedById], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([email])
+}
+
+// ============================= Workspace defaults =============================
+
+model Workspace {
+  id             String @id @default(cuid())
+  organizationId String @unique
+  name           String
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  knowledgeBase  KnowledgeBase?
+  pipelineStages PipelineStage[]
+  dealStages     DealStage[]
+
+  createdAt DateTime @default(now())
+}
+
+model KnowledgeBase {
+  id          String @id @default(cuid())
+  workspaceId String @unique
+  name        String @default("Knowledge Base")
+
+  workspace Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  articles  KnowledgeArticle[]
+
+  createdAt DateTime @default(now())
+}
+
+model PipelineStage {
+  id          String @id @default(cuid())
+  workspaceId String
+  name        String
+  order       Int
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  leads     Lead[]
+
+  @@unique([workspaceId, order])
+}
+
+model Lead {
+  id              String  @id @default(cuid())
+  pipelineStageId String
+  companyId       String?
+  name            String
+  company         String?
+  email           String?
+  // Estimated deal value in the organization's currency — the real (not
+  // fabricated) basis for Pipeline Value / Revenue on the Command Center.
+  // Null/absent leads simply don't contribute; there is no synthetic default.
+  estimatedValue  Float?
+
+  pipelineStage  PipelineStage @relation(fields: [pipelineStageId], references: [id], onDelete: Cascade)
+  companyRecord  Company?      @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  proposals      Proposal[]
+  meetings       Meeting[]
+  // Deals this Lead was converted into via "Convert to Deal" — a Lead can
+  // only sensibly convert once in normal use, but this is left many-valued
+  // (not a unique 1:1) so a mistaken duplicate conversion never fails a
+  // write; the UI is what enforces "convert once".
+  convertedDeals Deal[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ============================= Phase 10: Enterprise CRM (Deals) =============================
+//
+// A second, parallel pipeline sitting alongside Lead/PipelineStage above.
+// Lead/PipelineStage stay exactly as they were — they remain the Lead
+// Finder's top-of-funnel pipeline. Deal/DealStage is the enterprise
+// Sales Pipeline described in the CRM phase brief (New Lead -> Qualified ->
+// Research -> Opportunity -> Proposal -> Negotiation -> Contract -> Won ->
+// Lost -> Archived), a first-class Opportunity/Deal object that a Lead can
+// optionally be converted into. Kept separate rather than overloading Lead
+// so Lead Finder's semantics (a raw discovered prospect) never change.
+
+model DealStage {
+  id          String @id @default(cuid())
+  workspaceId String
+  name        String
+  order       Int
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  deals     Deal[]
+
+  @@unique([workspaceId, order])
+}
+
+model Deal {
+  id             String  @id @default(cuid())
+  organizationId String
+  dealStageId    String
+  companyId      String?
+  contactId      String?
+  sourceLeadId   String?
+  ownerUserId    String?
+
+  name              String
+  // Deal value in the organization's currency — same "real number or null,
+  // never fabricated" discipline as Lead.estimatedValue.
+  value             Float?
+  // 0-100. Null means "not yet estimated" — never defaulted to a guess.
+  probability       Int?
+  expectedCloseDate DateTime?
+  priority          MessagePriority @default(NORMAL)
+  products          String[]
+  services          String[]
+  // Set when the deal lands in a "Lost" stage; null otherwise.
+  lostReason        String?
+  notes             String?         @db.Text
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  dealStage    DealStage    @relation(fields: [dealStageId], references: [id], onDelete: Cascade)
+  company      Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  contact      Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  sourceLead   Lead?        @relation(fields: [sourceLeadId], references: [id], onDelete: SetNull)
+  owner        User?        @relation("DealOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+
+  proposals         Proposal[]
+  tasks             Task[]
+  documents         Document[]
+  reminders         Reminder[]
+  quotations        Quotation[]
+  contracts         Contract[]
+  invoices          Invoice[]
+  businessDocuments BusinessDocument[]
+  projects          Project[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([dealStageId])
+  @@index([ownerUserId])
+  @@index([companyId])
+}
+
+enum AgentType {
+  CEO
+  SALES
+  MARKETING
+  PROPOSAL
+  OUTREACH
+  CRM
+  ANALYTICS
+  FINANCE
+  LEGAL
+  PROJECT_MANAGER
+  // Added for the AI Delivery Board (Phase 5) — CEO and PROJECT_MANAGER are
+  // reused as-is, these 3 are net-new seats.
+  QA_DIRECTOR
+  DEVOPS_DIRECTOR
+  DELIVERY_DIRECTOR
+}
+
+enum AgentStatus {
+  IDLE
+  THINKING
+  RESEARCHING
+  PLANNING
+  ANALYZING
+  WAITING
+  COMPLETED
+}
+
+model AIAgentInstance {
+  id             String    @id @default(cuid())
+  organizationId String
+  type           AgentType
+  name           String
+  introMessage   String    @db.Text
+  active         Boolean   @default(true)
+
+  // Executive Board live-status fields — updated by the AI runtime as the
+  // agent actually works (real Claude calls), never faked/animated client-side.
+  status              AgentStatus @default(IDLE)
+  currentTask         String?
+  currentGoal         String?     @db.Text
+  activeWorkflow      String?
+  confidenceScore     Float?
+  completedTasksCount Int         @default(0)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  meetingParticipation       MeetingParticipant[]
+  meetingMessages            MeetingMessage[]
+  tasksAssignedByMe          Task[]                @relation("TaskAssignedByAgent")
+  tasksAssignedToMe          Task[]                @relation("TaskAssignedToAgent")
+  decisionVotes              DecisionVote[]
+  memories                   AgentMemory[]
+  conversationsSent          AgentConversation[]   @relation("ConversationSender")
+  conversationsReceived      AgentConversation[]   @relation("ConversationReceiver")
+  activities                 Activity[]
+  generatedProposals         Proposal[]
+  generatedQuotations        Quotation[]
+  generatedContracts         Contract[]
+  generatedBusinessDocuments BusinessDocument[]
+  companyIntelligenceRuns    CompanyIntelligence[]
+  researchNotes              ResearchNote[]
+  executiveReportsGenerated  ExecutiveReport[]
+  emailDraftsGenerated       EmailDraft[]
+  detectedProjectRisks       ProjectRisk[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, type])
+}
+
+// ============================= Phase 3: AI Executive Board =============================
+
+enum MeetingStatus {
+  SCHEDULED
+  LIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+model Meeting {
+  id               String        @id @default(cuid())
+  organizationId   String
+  title            String
+  agenda           String        @db.Text
+  status           MeetingStatus @default(SCHEDULED)
+  summary          String?       @db.Text
+  // Structured { summary, actionItems[], risks[], recommendations[], nextSteps[] }
+  // from generateMeetingSummary — `summary` above stays a flattened text render
+  // for backward compatibility with anything reading it directly.
+  notesJson        Json?
+  // Optional real link to a Lead — the honest, non-fabricated basis for the
+  // War Room's "Revenue Opportunity" stat. Null renders as "Not linked".
+  relatedLeadId    String?
+  // Optional real link to a Project — set for AI Delivery Board meetings
+  // (Phase 5), null for every pre-existing War Room / Review Board meeting.
+  relatedProjectId String?
+  startedAt        DateTime?
+  endedAt          DateTime?
+  createdById      String
+
+  organization    Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy       User                 @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  relatedLead     Lead?                @relation(fields: [relatedLeadId], references: [id], onDelete: SetNull)
+  relatedProject  Project?             @relation(fields: [relatedProjectId], references: [id], onDelete: SetNull)
+  participants    MeetingParticipant[]
+  messages        MeetingMessage[]
+  decisions       Decision[]
+  tasks           Task[]
+  boardReview     BoardReview?
+  recommendations Recommendation[]
+  actionItems     ActionItem[]
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([relatedProjectId])
+}
+
+model MeetingParticipant {
+  id        String  @id @default(cuid())
+  meetingId String
+  agentId   String?
+  userId    String?
+
+  meeting Meeting          @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  agent   AIAgentInstance? @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  user    User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  joinedAt DateTime @default(now())
+
+  @@unique([meetingId, agentId])
+  @@unique([meetingId, userId])
+}
+
+enum MeetingMessageType {
+  DISCUSSION
+  SUGGESTION
+  VOTE
+  DECISION
+  ACTION_ITEM
+  SUMMARY
+}
+
+model MeetingMessage {
+  id              String             @id @default(cuid())
+  meetingId       String
+  senderAgentId   String?
+  senderUserId    String?
+  type            MeetingMessageType @default(DISCUSSION)
+  content         String             @db.Text
+  // War Room briefing-card fields — populated by runMeetingAgentTurn's
+  // structured Claude output for agent messages; left at defaults/null for
+  // human messages, which honestly have none of these.
+  priority        MessagePriority    @default(NORMAL)
+  confidenceScore Float?
+  suggestedAction String?            @db.Text
+  evidence        String?            @db.Text
+  // Populated only for AI Proposal Review Board turns (runReviewAgentTurn) —
+  // {opinion, strengths[], weaknesses[], recommendations[{type,title,description}],
+  // confidenceScore, winProbability?, profitMarginEstimate?}. Null for every
+  // pre-existing/War-Room message; never backfilled or faked.
+  reviewJson      Json?
+
+  meeting     Meeting          @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  senderAgent AIAgentInstance? @relation(fields: [senderAgentId], references: [id], onDelete: Cascade)
+  senderUser  User?            @relation(fields: [senderUserId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([meetingId])
+}
+
+enum TaskStatus {
+  PENDING
+  RUNNING
+  BLOCKED
+  COMPLETED
+  CANCELLED
+  // Added for the Project Kanban board (Phase 14) — 5 project-lifecycle
+  // statuses alongside the 5 original AI-agent-task statuses above, which
+  // keep their exact original meaning for the War Room's global task inbox.
+  BACKLOG
+  REVIEW
+  TESTING
+  READY_FOR_CLIENT
+  ARCHIVED
+}
+
+enum TaskType {
+  CALL
+  EMAIL
+  MEETING
+  PROPOSAL
+  RESEARCH
+  FOLLOW_UP
+  DOCUMENTATION
+  APPROVAL
+  DEVELOPMENT
+  SUPPORT
+  // Added for the AI Delivery Board (Phase 5) — a real "File a Bug" workflow
+  // primitive, the input signal for QA_FAILURE risk detection and the
+  // Quality Score.
+  BUG
+}
+
+model Task {
+  id                 String          @id @default(cuid())
+  organizationId     String
+  meetingId          String?
+  projectId          String?
+  companyId          String?
+  contactId          String?
+  dealId             String?
+  assignedByAgentId  String?
+  assignedByUserId   String?
+  assignedToAgentId  String?
+  assignedToUserId   String?
+  title              String
+  description        String?         @db.Text
+  status             TaskStatus      @default(PENDING)
+  result             String?         @db.Text
+  dueDate            DateTime?
+  priority           MessagePriority @default(NORMAL)
+  // 0-100, owner-editable on the War Room Task Board — a real, stored field,
+  // not derived from checklist items, even though TaskChecklistItem now
+  // exists, since a checklist is optional and a task without one still
+  // needs a manually-set progress value.
+  progress           Int             @default(0)
+  type               TaskType?
+  parentTaskId       String?
+  labels             String[]
+  isRecurring        Boolean         @default(false)
+  // Free-text cadence ("DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY") — no RRULE
+  // parser exists in this app, so recurrence is intentionally this simple.
+  recurrenceRule     String?
+  recurrenceParentId String?
+
+  // ===== Phase 14: Project Management additions =====
+  sprintId          String?
+  milestoneId       String?
+  // Gantt needs a real start, not just dueDate.
+  startDate         DateTime?
+  estimatedHours    Float?
+  // Cached sum of real TimeEntry rows for this task — recomputed by a
+  // shared helper (src/lib/projects/health.ts), never hand-typed.
+  actualHours       Float?    @default(0)
+  visibleToClient   Boolean   @default(false)
+  // "Raise Tickets" reuses Task (TaskType.SUPPORT) + this flag instead of a
+  // parallel Ticket model — a client-raised ticket is a real Task.
+  clientRaised      Boolean   @default(false)
+  // Set once TASK_OVERDUE has actually fired for this task (by either the
+  // on-write check in task-actions.ts or the real hourly Scheduler Service
+  // job in scheduler/registry.ts) — the dedup guard that stops the hourly
+  // cron from re-notifying the same overdue task every single run. Cleared
+  // whenever dueDate/status changes take the task out of "overdue".
+  overdueNotifiedAt DateTime?
+
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  meeting         Meeting?         @relation(fields: [meetingId], references: [id], onDelete: SetNull)
+  project         Project?         @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  company         Company?         @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  contact         Contact?         @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  deal            Deal?            @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  assignedByAgent AIAgentInstance? @relation("TaskAssignedByAgent", fields: [assignedByAgentId], references: [id], onDelete: SetNull)
+  assignedByUser  User?            @relation("TaskAssignedByUser", fields: [assignedByUserId], references: [id], onDelete: SetNull)
+  assignedToAgent AIAgentInstance? @relation("TaskAssignedToAgent", fields: [assignedToAgentId], references: [id], onDelete: SetNull)
+  assignedToUser  User?            @relation("TaskAssignedToUser", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  sprint          Sprint?          @relation(fields: [sprintId], references: [id], onDelete: SetNull)
+  milestone       Milestone?       @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+
+  parentTask          Task?               @relation("TaskSubtasks", fields: [parentTaskId], references: [id], onDelete: Cascade)
+  subtasks            Task[]              @relation("TaskSubtasks")
+  recurrenceParent    Task?               @relation("TaskRecurrence", fields: [recurrenceParentId], references: [id], onDelete: SetNull)
+  recurrenceInstances Task[]              @relation("TaskRecurrence")
+  dependsOn           Task[]              @relation("TaskDependencies")
+  blocks              Task[]              @relation("TaskDependencies")
+  checklistItems      TaskChecklistItem[]
+  reminders           Reminder[]
+  timeEntries         TimeEntry[]
+  statusChanges       TaskStatusChange[]
+  linkedDocuments     Document[]
+  risks               ProjectRisk[]
+  actionItem          ActionItem?
+  bugReport           BugReport?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([projectId])
+  @@index([companyId])
+  @@index([dealId])
+  @@index([parentTaskId])
+  @@index([sprintId])
+  @@index([milestoneId])
+}
+
+model TaskChecklistItem {
+  id     String  @id @default(cuid())
+  taskId String
+  label  String
+  done   Boolean @default(false)
+  order  Int
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+}
+
+model Reminder {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String
+  title          String
+  remindAt       DateTime
+  dismissed      Boolean  @default(false)
+
+  relatedDealId    String?
+  relatedTaskId    String?
+  relatedContactId String?
+  relatedCompanyId String?
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  relatedDeal    Deal?        @relation(fields: [relatedDealId], references: [id], onDelete: SetNull)
+  relatedTask    Task?        @relation(fields: [relatedTaskId], references: [id], onDelete: SetNull)
+  relatedContact Contact?     @relation(fields: [relatedContactId], references: [id], onDelete: SetNull)
+  relatedCompany Company?     @relation(fields: [relatedCompanyId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([userId, remindAt])
+}
+
+enum DecisionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  ESCALATED
+  DELAYED
+  DELEGATED
+}
+
+enum VoteChoice {
+  APPROVE
+  REJECT
+  ESCALATE
+  DISCUSS
+  DELAY
+  DELEGATE
+  APPROVE_WITH_CHANGES // AI Proposal Review Board only
+  REQUEST_REVISION // AI Proposal Review Board only
+}
+
+enum DecisionCategory {
+  PROPOSAL_APPROVAL
+  CLIENT_CONTACT
+  QUOTE_GENERATION
+  MEETING_SCHEDULING
+  ISSUE_ESCALATION
+  GENERAL
+  QUOTATION_APPROVAL
+  CONTRACT_APPROVAL
+  INVOICE_APPROVAL
+  // Added for the AI Delivery Board (Phase 5).
+  PROJECT_DELIVERY
+}
+
+model Decision {
+  id                 String           @id @default(cuid())
+  organizationId     String
+  meetingId          String?
+  topic              String
+  description        String?          @db.Text
+  category           DecisionCategory @default(GENERAL)
+  status             DecisionStatus   @default(PENDING)
+  finalizedAt        DateTime?
+  // Structured Decision Engine fields (Phase 5) — optional, untouched by
+  // every pre-existing simpler decision. "Reason"/"Confidence Score"/
+  // "Supporting Evidence" already live on the proposing MeetingMessage.
+  riskLevel          RiskLevel?
+  financialImpact    Float?
+  deadlineImpactDays Int?
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  meeting      Meeting?       @relation(fields: [meetingId], references: [id], onDelete: SetNull)
+  votes        DecisionVote[]
+  boardReview  BoardReview?
+  actionItems  ActionItem[]
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+}
+
+model DecisionVote {
+  id         String     @id @default(cuid())
+  decisionId String
+  agentId    String
+  vote       VoteChoice
+  reasoning  String     @db.Text
+
+  decision Decision        @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+  agent    AIAgentInstance @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([decisionId, agentId])
+}
+
+enum MemoryType {
+  PREFERENCE
+  GOAL
+  PAST_DECISION
+  MEETING_NOTE
+  CLIENT_CONTEXT
+  KNOWLEDGE
+  TASK
+}
+
+// Real record this memory was distilled from, if any — MANUAL covers memory
+// a user wrote directly via the AI Memory Manager UI rather than one an
+// agent derived from a real event.
+enum MemorySourceKind {
+  MEETING
+  DEAL
+  PROPOSAL
+  PROJECT
+  TASK
+  MANUAL
+}
+
+model AgentMemory {
+  id               String     @id @default(cuid())
+  agentId          String
+  organizationId   String
+  type             MemoryType
+  // AES-256-GCM ciphertext (base64: iv + authTag + ciphertext) — see src/lib/ai/encryption.ts.
+  // Never store or query plaintext here.
+  encryptedContent String     @db.Text
+
+  pinned     Boolean           @default(false)
+  archivedAt DateTime?
+  sourceKind MemorySourceKind?
+  sourceId   String?
+
+  agent        AIAgentInstance    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  events       AgentMemoryEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([agentId])
+  @@index([organizationId, type])
+  @@index([agentId, pinned])
+  @@index([agentId, archivedAt])
+}
+
+enum MemoryEventType {
+  CREATED
+  EDITED
+  PINNED
+  UNPINNED
+  ARCHIVED
+  RESTORED
+  DELETED
+}
+
+// Real audit trail backing the AI Memory Manager's Memory Timeline — one row
+// per real state change to a memory (never inferred/reconstructed after the
+// fact). memoryId is nullable so a DELETED event can still be listed after
+// the AgentMemory row itself is gone (memory's own onDelete: Cascade would
+// otherwise erase its own history) — the deleted memory's last known
+// (encrypted) content is preserved in `contentSnapshot` for exactly that
+// case.
+model AgentMemoryEvent {
+  id              String          @id @default(cuid())
+  memoryId        String?
+  agentId         String
+  organizationId  String
+  eventType       MemoryEventType
+  contentSnapshot String?         @db.Text
+  actorUserId     String?
+
+  memory       AgentMemory? @relation(fields: [memoryId], references: [id], onDelete: SetNull)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, agentId])
+  @@index([memoryId])
+}
+
+enum MessagePriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+model AgentConversation {
+  id              String          @id @default(cuid())
+  organizationId  String
+  senderAgentId   String
+  receiverAgentId String?
+  reason          String
+  priority        MessagePriority @default(NORMAL)
+  content         String          @db.Text
+  attachments     Json?
+  parentId        String?
+
+  organization  Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  senderAgent   AIAgentInstance     @relation("ConversationSender", fields: [senderAgentId], references: [id], onDelete: Cascade)
+  receiverAgent AIAgentInstance?    @relation("ConversationReceiver", fields: [receiverAgentId], references: [id], onDelete: Cascade)
+  parent        AgentConversation?  @relation("ConversationThread", fields: [parentId], references: [id], onDelete: SetNull)
+  replies       AgentConversation[] @relation("ConversationThread")
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([parentId])
+}
+
+enum NotificationType {
+  MEETING_STARTED
+  MEETING_ENDED
+  TASK_ASSIGNED
+  TASK_COMPLETED
+  DECISION_MADE
+  NEW_RECOMMENDATION
+  CRITICAL_ALERT
+  APPROVAL_REQUESTED
+  EMAIL_READY
+  CRM_EVENT
+  AUTOMATION_EVENT
+  SYSTEM_NOTICE
+  PROPOSAL_SENT
+  PROPOSAL_ACCEPTED
+  PROPOSAL_REJECTED
+  CONTRACT_SIGNED
+  INVOICE_PAID
+  BOARD_REVIEW_STARTED
+  BOARD_REVIEW_COMPLETED
+  PROJECT_CREATED
+  MILESTONE_COMPLETED
+  RISK_DETECTED
+  DEADLINE_APPROACHING
+  CLIENT_COMMENT_ADDED
+  CLIENT_APPROVED_MILESTONE
+  // Added for the AI Delivery Board (Phase 5) — everything else the brief's
+  // "Owner Notifications" wants already maps to an existing value above
+  // (CRITICAL_ALERT, DEADLINE_APPROACHING, RISK_DETECTED, APPROVAL_REQUESTED).
+  DELIVERY_HEALTH_DROPPED
+}
+
+model Notification {
+  id             String           @id @default(cuid())
+  userId         String
+  organizationId String
+  type           NotificationType
+  title          String
+  message        String           @db.Text
+  read           Boolean          @default(false)
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+}
+
+enum ActivityType {
+  MEETING
+  AGENT_MESSAGE
+  TASK_UPDATE
+  COMPLETED_WORK
+  NOTIFICATION
+  SYSTEM_EVENT
+}
+
+model Activity {
+  id             String       @id @default(cuid())
+  organizationId String
+  type           ActivityType
+  description    String
+  actorAgentId   String?
+  actorUserId    String?
+  metadata       Json?
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actorAgent   AIAgentInstance? @relation(fields: [actorAgentId], references: [id], onDelete: SetNull)
+  actorUser    User?            @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+}
+
+// ============================= Phase 4: AI Command Center =============================
+
+enum WidgetType {
+  REVENUE
+  PIPELINE
+  TASKS
+  CALENDAR
+  NOTES
+  AI_ACTIVITY
+  REPORTS
+  WEATHER
+  CLOCK
+  UPCOMING_MEETINGS
+}
+
+model Dashboard {
+  id             String  @id @default(cuid())
+  organizationId String
+  userId         String
+  name           String
+  isDefault      Boolean @default(false)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  widgets      Widget[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, name])
+  @@index([organizationId])
+}
+
+model Widget {
+  id          String     @id @default(cuid())
+  dashboardId String
+  type        WidgetType
+  // react-grid-layout item shape: { x, y, w, h }
+  position    Json
+  config      Json?
+
+  dashboard Dashboard @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([dashboardId])
+}
+
+// User-saved, org-shared reusable layouts — distinct from the 3 hardcoded
+// DASHBOARD_TEMPLATES presets in src/lib/dashboard-templates.ts. Any member
+// creating a new dashboard can pick one of these alongside the built-ins.
+// `widgets` mirrors DASHBOARD_TEMPLATES' shape: Array<{ type: WidgetType,
+// position: { x, y, w, h } }> — deliberately no `config`/widget `id`, since a
+// template is a layout shape, not widget-specific saved data.
+model DashboardTemplate {
+  id              String  @id @default(cuid())
+  organizationId  String
+  createdByUserId String?
+  name            String
+  widgets         Json
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdByUser User?        @relation("DashboardTemplateCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+}
+
+enum InsightType {
+  TOP_OPPORTUNITY
+  HIGHEST_PRIORITY
+  RISK_ALERT
+  GROWTH_SUGGESTION
+  SALES_SUGGESTION
+  MARKETING_SUGGESTION
+  PRODUCTIVITY_SUGGESTION
+}
+
+model Insight {
+  id             String      @id @default(cuid())
+  organizationId String
+  type           InsightType
+  title          String
+  description    String      @db.Text
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+}
+
+// ============================= Phase 5: Growth modules =============================
+// Companies/Clients/Projects/Proposals/Documents/Automation/Billing/Marketplace —
+// completes the AI Command Center sidebar so nothing is left as a "coming soon" stub.
+
+enum CompanySource {
+  MANUAL
+  LEAD_FINDER
+  CLIENT_FINDER
+  WEBSITE_SCANNER
+}
+
+enum CompanyStatus {
+  PROSPECT
+  LEAD
+  CLIENT
+  CHURNED
+}
+
+model Company {
+  id             String        @id @default(cuid())
+  organizationId String
+  name           String
+  industry       String?
+  website        String?
+  email          String?
+  phone          String?
+  address        String?
+  employeeCount  Int?
+  notes          String?       @db.Text
+  source         CompanySource @default(MANUAL)
+  status         CompanyStatus @default(PROSPECT)
+
+  // ===== Company Intelligence profile fields (Lead Finder phase) =====
+  logo                String?
+  description         String?         @db.Text
+  headquartersCountry String?
+  headquartersState   String?
+  headquartersCity    String?
+  // Best-effort geocoded via Nominatim (see src/lib/geo/geocode.ts) — null
+  // when geocoding hasn't run or failed, never a guessed coordinate.
+  latitude            Float?
+  longitude           Float?
+  // Array of { label, address } — additional office locations beyond HQ.
+  locations           Json?
+  estimatedRevenue    Float?
+  foundedYear         Int?
+  technologies        String[]
+  products            String[]
+  servicesOffered     String[]
+  targetCustomers     String?         @db.Text
+  // { linkedin?, facebook?, twitter?, instagram? }
+  socialLinks         Json?
+  googleMapsUrl       String?
+  contactFormUrl      String?
+  businessType        String?
+  remoteHybrid        String?
+  publicPrivate       String?
+  growthRate          Float?
+  fundingStage        String?
+  fundingAmount       Float?
+  language            String?
+  ownerUserId         String?
+  priority            MessagePriority @default(NORMAL)
+
+  organization      Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner             User?                  @relation("CompanyOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  leads             Lead[]
+  clients           Client[]
+  projects          Project[]
+  proposals         Proposal[]
+  documents         Document[]
+  tasks             Task[]
+  leadScore         LeadScore?
+  intelligenceRuns  CompanyIntelligence[]
+  researchNotes     ResearchNote[]
+  timelineEvents    CompanyTimelineEvent[]
+  watchlistEntries  WatchlistCompany[]
+  recommendations   Recommendation[]
+  websiteScans      WebsiteScan[]
+  contacts          Contact[]
+  deals             Deal[]
+  reminders         Reminder[]
+  quotations        Quotation[]
+  contracts         Contract[]
+  invoices          Invoice[]
+  businessDocuments BusinessDocument[]
+  subscriptions     Subscription[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+}
+
+enum ClientStatus {
+  ACTIVE
+  INACTIVE
+  CHURNED
+}
+
+model Client {
+  id             String       @id @default(cuid())
+  organizationId String
+  companyId      String?
+  name           String
+  email          String?
+  phone          String?
+  status         ClientStatus @default(ACTIVE)
+  contractValue  Float?
+  notes          String?      @db.Text
+
+  organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  company       Company?           @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  projects      Project[]
+  contracts     Contract[]
+  invoices      Invoice[]
+  portalUsers   ClientPortalUser[]
+  subscriptions Subscription[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+}
+
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+// The Owner Dashboard's "Support" project-type list — matches the Proposal
+// Generator's industry list in spirit but kept as its own enum since a
+// Project's delivery type and a Proposal's sales-industry framing are
+// different concepts that happen to share vocabulary.
+enum ProjectType {
+  SUPPORT
+  SOFTWARE_DEVELOPMENT
+  ERP
+  CRM
+  SAAS
+  MOBILE_APP
+  AI_AUTOMATION
+  WEBSITE
+  CLOUD_MIGRATION
+  CONSULTING
+  MAINTENANCE
+  AMC
+}
+
+// Recomputed by src/lib/projects/health.ts from real signals (overdue-task
+// ratio, budget burn) — never hand-set to a fabricated value.
+enum ProjectHealthStatus {
+  ON_TRACK
+  AT_RISK
+  OFF_TRACK
+}
+
+model Project {
+  id             String        @id @default(cuid())
+  organizationId String
+  companyId      String?
+  clientId       String?
+  // Origin link when auto-created from a Won Deal — null for manually
+  // created projects.
+  dealId         String?
+  name           String
+  description    String?       @db.Text
+  status         ProjectStatus @default(PLANNING)
+  ownerUserId    String?
+  startDate      DateTime?
+  dueDate        DateTime?
+
+  projectType  ProjectType?
+  // Reuses the existing MessagePriority enum (LOW/NORMAL/HIGH/URGENT)
+  // rather than declaring a duplicate ProjectPriority.
+  priority     MessagePriority     @default(NORMAL)
+  budget       Float?
+  // Cached 0-100, recomputed by recomputeProjectProgress() whenever a task's
+  // status changes within this project — real, never a static placeholder.
+  progress     Int                 @default(0)
+  healthStatus ProjectHealthStatus @default(ON_TRACK)
+  tags         String[]
+  department   String?
+
+  organization      Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  company           Company?                @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  client            Client?                 @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  deal              Deal?                   @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  owner             User?                   @relation("ProjectOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  tasks             Task[]
+  documents         Document[]
+  proposals         Proposal[]
+  businessDocuments BusinessDocument[]
+  members           ProjectMember[]
+  milestones        Milestone[]
+  sprints           Sprint[]
+  risks             ProjectRisk[]
+  timeEntries       TimeEntry[]
+  meetings          Meeting[]
+  recommendations   Recommendation[]
+  healthSnapshots   ProjectHealthSnapshot[]
+  deliveryReports   DeliveryReport[]
+  files             ProjectFile[]
+  actionItems       ActionItem[]
+  bugReports        BugReport[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([clientId])
+  @@index([dealId])
+}
+
+enum ProposalStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+}
+
+// Domain the proposal is for — the AI Proposal Engine's "Support" list.
+// Shared by Proposal.industry and DocumentTemplate.category.
+enum DocumentIndustry {
+  SOFTWARE_DEVELOPMENT
+  ERP
+  CRM
+  SAAS
+  MOBILE_APPS
+  AI_SOLUTIONS
+  AUTOMATION
+  CLOUD
+  DEVOPS
+  CONSULTING
+  DIGITAL_TRANSFORMATION
+}
+
+// The Pricing Engine's supported pricing models — shared across Proposal
+// and Quotation rather than a separate "Pricing" table, since it's
+// fundamentally a calculation mode plus the numeric fields each of those
+// models already has (value/subtotal/tax/etc.), not its own entity.
+enum PricingModel {
+  FIXED
+  HOURLY
+  MONTHLY
+  RETAINER
+  AMC
+  ENTERPRISE
+  CUSTOM
+}
+
+model Proposal {
+  id                 String            @id @default(cuid())
+  organizationId     String
+  companyId          String?
+  leadId             String?
+  dealId             String?
+  projectId          String?
+  title              String
+  content            String            @db.Text
+  status             ProposalStatus    @default(DRAFT)
+  value              Float?
+  industry           DocumentIndustry?
+  pricingModel       PricingModel?
+  // Structured AI Proposal Engine output: { executiveSummary, businessChallenges,
+  // currentProblems, recommendedSolution, techStack, architecture, features,
+  // modules, timeline, deliverables, support, warranty, terms, callToAction }.
+  // `content` above stays a flattened text render for backward compatibility
+  // with anything reading it directly (same pattern as Meeting.notesJson vs summary).
+  sections           Json?
+  // { resources: [{role,count}], milestones: [{name,dueOffsetDays,description}], totalHours }
+  estimation         Json?
+  generatedByAgentId String?
+  createdByUserId    String?
+
+  // ===== Tracking (same fields/semantics as EmailDraft's proven open/click tracking) =====
+  trackingToken     String?   @unique
+  openCount         Int       @default(0)
+  firstOpenedAt     DateTime?
+  downloadCount     Int       @default(0)
+  firstDownloadedAt DateTime?
+  sentAt            DateTime?
+  acceptedAt        DateTime?
+  rejectedAt        DateTime?
+  // Dedup guard for the Scheduler Service's proposal-follow-up-reminder job
+  // (src/lib/scheduler/registry.ts) — set once a real reminder has been sent
+  // for this still-SENT proposal, so the job never re-notifies every run.
+  reminderSentAt    DateTime?
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  company          Company?         @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  lead             Lead?            @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  deal             Deal?            @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  project          Project?         @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  generatedByAgent AIAgentInstance? @relation(fields: [generatedByAgentId], references: [id], onDelete: SetNull)
+  createdByUser    User?            @relation("ProposalCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  documents        Document[]
+  recommendations  Recommendation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([dealId])
+}
+
+model Document {
+  id                       String  @id @default(cuid())
+  organizationId           String
+  name                     String
+  // Relative path under the app-local storage/documents/ directory — never
+  // under public/, always streamed through an auth-gated route handler.
+  storageKey               String
+  mimeType                 String
+  sizeBytes                Int
+  folder                   String?
+  linkedCompanyId          String?
+  linkedProjectId          String?
+  linkedProposalId         String?
+  linkedDealId             String?
+  linkedQuotationId        String?
+  linkedContractId         String?
+  linkedInvoiceId          String?
+  linkedBusinessDocumentId String?
+  linkedTaskId             String?
+  uploadedByUserId         String?
+  // Gates whether the Client Portal's file list can show this row — never
+  // shown to a client by default.
+  visibleToClient          Boolean @default(false)
+
+  organization           Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  linkedCompany          Company?          @relation(fields: [linkedCompanyId], references: [id], onDelete: SetNull)
+  linkedProject          Project?          @relation(fields: [linkedProjectId], references: [id], onDelete: SetNull)
+  linkedProposal         Proposal?         @relation(fields: [linkedProposalId], references: [id], onDelete: SetNull)
+  linkedDeal             Deal?             @relation(fields: [linkedDealId], references: [id], onDelete: SetNull)
+  linkedQuotation        Quotation?        @relation(fields: [linkedQuotationId], references: [id], onDelete: SetNull)
+  linkedContract         Contract?         @relation(fields: [linkedContractId], references: [id], onDelete: SetNull)
+  linkedInvoice          Invoice?          @relation(fields: [linkedInvoiceId], references: [id], onDelete: SetNull)
+  linkedBusinessDocument BusinessDocument? @relation(fields: [linkedBusinessDocumentId], references: [id], onDelete: SetNull)
+  linkedTask             Task?             @relation(fields: [linkedTaskId], references: [id], onDelete: SetNull)
+  uploadedByUser         User?             @relation("DocumentUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([linkedTaskId])
+}
+
+// ============================= Phase 12: Enterprise Document Generation =============================
+//
+// Proposal (extended above) stays the flagship AI-authored document.
+// Quotation/Contract/Invoice get dedicated models because they carry real
+// structured/relational data (line items, tax math, signature/payment
+// state) that Proposal doesn't. Every other "generate title + rich text,
+// link to a company/deal/project, track status" document kind (NDA, MSA,
+// SLA, Terms, Privacy Agreement, Acceptance Letter, Delivery Certificate,
+// Scope of Work, Requirement Specification, Technical Architecture,
+// Project Roadmap, Risk Register, Acceptance Criteria, Project Plan,
+// Business Report) shares ONE model (BusinessDocument) discriminated by
+// `kind` — building 14 near-identical tables would be pure duplication.
+//
+// DocumentVersion and Signature are intentionally polymorphic (docKind +
+// docId, no hard FK) since Prisma has no native polymorphic relation and
+// a real FK would require picking one target table — the same
+// loose-reference pattern already used by Activity.metadata's dealId.
+// Referential integrity for these two is enforced in application code.
+
+enum DocumentKind {
+  PROPOSAL
+  QUOTATION
+  CONTRACT
+  INVOICE
+  BUSINESS_DOCUMENT
+}
+
+enum QuotationStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+model Quotation {
+  id                 String          @id @default(cuid())
+  organizationId     String
+  companyId          String?
+  contactId          String?
+  dealId             String?
+  quotationNumber    String
+  title              String
+  status             QuotationStatus @default(DRAFT)
+  pricingModel       PricingModel?
+  currency           String?
+  subtotal           Float           @default(0)
+  discountPercent    Float?
+  discountAmount     Float           @default(0)
+  taxPercent         Float?
+  taxAmount          Float           @default(0)
+  grandTotal         Float           @default(0)
+  validUntil         DateTime?
+  notes              String?         @db.Text
+  terms              String?         @db.Text
+  generatedByAgentId String?
+  createdByUserId    String?
+
+  trackingToken     String?   @unique
+  openCount         Int       @default(0)
+  firstOpenedAt     DateTime?
+  downloadCount     Int       @default(0)
+  firstDownloadedAt DateTime?
+  sentAt            DateTime?
+  acceptedAt        DateTime?
+  rejectedAt        DateTime?
+
+  organization     Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  company          Company?            @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  contact          Contact?            @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  deal             Deal?               @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  generatedByAgent AIAgentInstance?    @relation(fields: [generatedByAgentId], references: [id], onDelete: SetNull)
+  createdByUser    User?               @relation("QuotationCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  lineItems        QuotationLineItem[]
+  documents        Document[]
+  recommendations  Recommendation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, quotationNumber])
+  @@index([organizationId])
+  @@index([dealId])
+}
+
+model QuotationLineItem {
+  id              String @id @default(cuid())
+  quotationId     String
+  description     String
+  quantity        Float  @default(1)
+  rate            Float  @default(0)
+  discountPercent Float?
+  amount          Float  @default(0)
+  order           Int    @default(0)
+
+  quotation Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+
+  @@index([quotationId])
+}
+
+enum ContractType {
+  SOFTWARE_DEVELOPMENT_AGREEMENT
+  AMC_AGREEMENT
+  MAINTENANCE_AGREEMENT
+  SUPPORT_AGREEMENT
+  IMPLEMENTATION_AGREEMENT
+  CONSULTING_AGREEMENT
+}
+
+enum ContractStatus {
+  DRAFT
+  SENT
+  SIGNED
+  REJECTED
+  EXPIRED
+  ARCHIVED
+}
+
+model Contract {
+  id                 String         @id @default(cuid())
+  organizationId     String
+  companyId          String?
+  dealId             String?
+  clientId           String?
+  contractNumber     String
+  type               ContractType
+  title              String
+  content            String         @db.Text
+  status             ContractStatus @default(DRAFT)
+  value              Float?
+  startDate          DateTime?
+  endDate            DateTime?
+  generatedByAgentId String?
+  createdByUserId    String?
+
+  trackingToken     String?   @unique
+  openCount         Int       @default(0)
+  firstOpenedAt     DateTime?
+  downloadCount     Int       @default(0)
+  firstDownloadedAt DateTime?
+  sentAt            DateTime?
+  signedAt          DateTime?
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  company          Company?         @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  deal             Deal?            @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  client           Client?          @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  generatedByAgent AIAgentInstance? @relation(fields: [generatedByAgentId], references: [id], onDelete: SetNull)
+  createdByUser    User?            @relation("ContractCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  documents        Document[]
+  recommendations  Recommendation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, contractNumber])
+  @@index([organizationId])
+  @@index([dealId])
+}
+
+enum InvoiceType {
+  STANDARD
+  GST
+  RECURRING
+  PROFORMA
+  CREDIT_NOTE
+  DEBIT_NOTE
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+  CANCELLED
+  VOID
+}
+
+model Invoice {
+  id              String        @id @default(cuid())
+  organizationId  String
+  companyId       String?
+  dealId          String?
+  clientId        String?
+  invoiceNumber   String
+  type            InvoiceType   @default(STANDARD)
+  status          InvoiceStatus @default(DRAFT)
+  issueDate       DateTime      @default(now())
+  dueDate         DateTime?
+  currency        String?
+  subtotal        Float         @default(0)
+  discountPercent Float?
+  discountAmount  Float         @default(0)
+  taxPercent      Float?
+  taxAmount       Float         @default(0)
+  grandTotal      Float         @default(0)
+  amountPaid      Float         @default(0)
+  isRecurring     Boolean       @default(false)
+  recurrenceRule  String?
+  notes           String?       @db.Text
+  terms           String?       @db.Text
+  createdByUserId String?
+
+  trackingToken     String?   @unique
+  openCount         Int       @default(0)
+  firstOpenedAt     DateTime?
+  downloadCount     Int       @default(0)
+  firstDownloadedAt DateTime?
+  sentAt            DateTime?
+  paidAt            DateTime?
+  // Dedup guard for the Scheduler Service's invoice-due-reminder job
+  // (src/lib/scheduler/registry.ts) — set once a real reminder has been sent
+  // for this unpaid invoice, so the job never re-notifies every run.
+  reminderSentAt    DateTime?
+
+  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  company         Company?          @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  deal            Deal?             @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  client          Client?           @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  createdByUser   User?             @relation("InvoiceCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  lineItems       InvoiceLineItem[]
+  documents       Document[]
+  recommendations Recommendation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, invoiceNumber])
+  @@index([organizationId])
+  @@index([dealId])
+  @@index([status])
+}
+
+model InvoiceLineItem {
+  id          String @id @default(cuid())
+  invoiceId   String
+  description String
+  quantity    Float  @default(1)
+  rate        Float  @default(0)
+  amount      Float  @default(0)
+  order       Int    @default(0)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+enum BusinessDocumentKind {
+  NDA
+  MSA
+  SLA
+  TERMS
+  PRIVACY_AGREEMENT
+  ACCEPTANCE_LETTER
+  DELIVERY_CERTIFICATE
+  SCOPE_OF_WORK
+  REQUIREMENT_SPECIFICATION
+  TECHNICAL_ARCHITECTURE
+  PROJECT_ROADMAP
+  RISK_REGISTER
+  ACCEPTANCE_CRITERIA
+  PROJECT_PLAN
+  BUSINESS_REPORT
+}
+
+enum BusinessDocumentStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+  ARCHIVED
+}
+
+model BusinessDocument {
+  id                 String                 @id @default(cuid())
+  organizationId     String
+  companyId          String?
+  dealId             String?
+  projectId          String?
+  kind               BusinessDocumentKind
+  title              String
+  content            String                 @db.Text
+  status             BusinessDocumentStatus @default(DRAFT)
+  generatedByAgentId String?
+  createdByUserId    String?
+
+  trackingToken     String?   @unique
+  openCount         Int       @default(0)
+  firstOpenedAt     DateTime?
+  downloadCount     Int       @default(0)
+  firstDownloadedAt DateTime?
+  sentAt            DateTime?
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  company          Company?         @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  deal             Deal?            @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  project          Project?         @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  generatedByAgent AIAgentInstance? @relation(fields: [generatedByAgentId], references: [id], onDelete: SetNull)
+  createdByUser    User?            @relation("BusinessDocumentCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  documents        Document[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([dealId])
+  @@index([kind])
+}
+
+model DocumentTemplate {
+  id              String                @id @default(cuid())
+  organizationId  String
+  name            String
+  docKind         DocumentKind
+  category        DocumentIndustry?
+  businessDocKind BusinessDocumentKind?
+  contractType    ContractType?
+  content         String                @db.Text
+  isDefault       Boolean               @default(false)
+  createdByUserId String?
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdByUser User?        @relation("DocumentTemplateCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([docKind])
+}
+
+model DocumentVersion {
+  id              String       @id @default(cuid())
+  organizationId  String
+  docKind         DocumentKind
+  docId           String
+  versionNumber   Int
+  snapshotTitle   String
+  snapshotContent String       @db.Text
+  changeNote      String?
+  changedByUserId String?
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  changedByUser User?        @relation("DocumentVersionChangedBy", fields: [changedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([docKind, docId])
+}
+
+enum SignatureProvider {
+  MANUAL
+  DOCUSIGN
+  ADOBE_SIGN
+  DROPBOX_SIGN
+}
+
+enum SignatureStatus {
+  PENDING
+  SIGNED
+  DECLINED
+  EXPIRED
+}
+
+// Digital-signature-ready architecture: MANUAL is fully implemented (a
+// public token-based signing page records signerName/typedSignature/IP and
+// flips the parent document to SIGNED). DOCUSIGN/ADOBE_SIGN/DROPBOX_SIGN
+// are modeled so a future phase can wire in a real vendor integration
+// without a schema change — no real API calls are made to any of them
+// today (no vendor credentials exist in this environment).
+model Signature {
+  id                 String            @id @default(cuid())
+  organizationId     String
+  docKind            DocumentKind
+  docId              String
+  signerName         String
+  signerEmail        String
+  provider           SignatureProvider @default(MANUAL)
+  status             SignatureStatus   @default(PENDING)
+  signatureToken     String            @unique
+  typedSignature     String?
+  signedAt           DateTime?
+  ipAddress          String?
+  requestedByUserId  String?
+  // Third-party envelope id (DocuSign envelopeId, Adobe Sign agreementId,
+  // Dropbox Sign signature_request_id) — set only once a real envelope is
+  // created via the Integration Layer (src/lib/integrations/*). Null for
+  // MANUAL signatures. The webhook receivers under src/app/api/webhooks/
+  // look a Signature up by this field to mark it SIGNED on a real
+  // provider-pushed event, never by polling/guessing.
+  providerEnvelopeId String?
+
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  requestedByUser User?        @relation("SignatureRequestedBy", fields: [requestedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@unique([provider, providerEnvelopeId])
+  @@index([organizationId])
+  @@index([docKind, docId])
+}
+
+// ===== Phase 17: Enterprise Knowledge Base / AI Long-Term Memory / RAG Engine =====
+// KnowledgeArticleKind/Status/visibility are additive to the pre-existing
+// flat KnowledgeArticle (createdAt/updatedAt/tags/knowledgeBaseId unchanged,
+// every existing row is valid under the new defaults: kind ARTICLE, status
+// PUBLISHED — the old model had no draft concept, so treating pre-existing
+// rows as already-published is the only honest default). `tags String[]`
+// stays as the simple free-text tag column existing UI already reads/writes
+// (src/app/dashboard/knowledge-base/_components/article-form.tsx); the new
+// `tagEntities`/KnowledgeTag relation below is an additional, real
+// tag-as-entity system (autocomplete, per-tag article counts, tag pages) —
+// both coexist, neither replaces the other.
+enum KnowledgeArticleKind {
+  ARTICLE
+  FAQ
+  POLICY
+  PROCEDURE
+  PLAYBOOK
+  TEMPLATE
+  MEETING_NOTES
+  SOP
+  TECHNICAL_DOC
+  SALES_DOC
+  HR_DOC
+  FINANCE_DOC
+}
+
+enum KnowledgeArticleStatus {
+  DRAFT
+  PENDING_REVIEW
+  PUBLISHED
+  ARCHIVED
+}
+
+// PRIVATE: only createdByUserId can read/edit. ORG: every active member of
+// the organization. There is no Department model anywhere else in this
+// schema, so a DEPARTMENT visibility tier isn't backed by a real table yet —
+// left out rather than faked; ORG is the honest ceiling today.
+enum KnowledgeArticleVisibility {
+  PRIVATE
+  ORG
+}
+
+model KnowledgeArticle {
+  id              String   @id @default(cuid())
+  knowledgeBaseId String
+  title           String
+  content         String   @db.Text
+  tags            String[]
+  createdByUserId String?
+
+  categoryId String?
+  kind       KnowledgeArticleKind       @default(ARTICLE)
+  status     KnowledgeArticleStatus     @default(PUBLISHED)
+  visibility KnowledgeArticleVisibility @default(ORG)
+
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+
+  knowledgeBase KnowledgeBase             @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  createdByUser User?                     @relation("ArticleCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  category      KnowledgeCategory?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  tagEntities   KnowledgeTag[]            @relation("ArticleTags")
+  versions      KnowledgeArticleVersion[]
+  attachments   KnowledgeAttachment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([knowledgeBaseId])
+  @@index([categoryId])
+}
+
+model KnowledgeCategory {
+  id             String  @id @default(cuid())
+  organizationId String
+  name           String
+  slug           String
+  description    String?
+  parentId       String?
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  parent       KnowledgeCategory?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children     KnowledgeCategory[] @relation("CategoryHierarchy")
+  articles     KnowledgeArticle[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([organizationId, slug])
+  @@index([organizationId, parentId])
+}
+
+model KnowledgeTag {
+  id             String @id @default(cuid())
+  organizationId String
+  name           String
+  slug           String
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  articles     KnowledgeArticle[] @relation("ArticleTags")
+
+  createdAt DateTime @default(now())
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+}
+
+// Full-content snapshot taken on every real edit (not a diff store) — same
+// "keep the whole prior version" simplicity as DocumentVersion elsewhere in
+// this schema, not a byte-diff engine.
+model KnowledgeArticleVersion {
+  id             String  @id @default(cuid())
+  articleId      String
+  title          String
+  content        String  @db.Text
+  editedByUserId String?
+
+  article      KnowledgeArticle @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  editedByUser User?            @relation("KnowledgeArticleVersionEditor", fields: [editedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([articleId])
+}
+
+model KnowledgeAttachment {
+  id               String  @id @default(cuid())
+  articleId        String
+  filename         String
+  storageKey       String  @db.Text
+  mimeType         String
+  sizeBytes        Int
+  uploadedByUserId String?
+
+  article        KnowledgeArticle @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  uploadedByUser User?            @relation("KnowledgeAttachmentUploader", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([articleId])
+}
+
+// ===== RAG Engine: document ingestion, chunking, embeddings =====
+
+enum IngestedDocumentSourceKind {
+  UPLOAD
+  KNOWLEDGE_ARTICLE
+  DEAL
+  PROJECT
+  MEETING
+  PROPOSAL
+}
+
+enum IngestedDocumentStatus {
+  PENDING
+  PARSING
+  CHUNKING
+  EMBEDDING
+  READY
+  FAILED
+}
+
+// One row per real ingested source (an uploaded file, or a pointer at an
+// existing KnowledgeArticle/Deal/Project/Meeting/Proposal this org already
+// has) — DocumentChunk rows are its real, persisted chunks; nothing here is
+// a cache that can be silently dropped, since Embedding rows reference
+// DocumentChunk.id directly.
+model IngestedDocument {
+  id               String                     @id @default(cuid())
+  organizationId   String
+  title            String
+  sourceKind       IngestedDocumentSourceKind
+  sourceId         String?
+  originalFilename String?
+  mimeType         String?
+  storageKey       String?                    @db.Text
+  status           IngestedDocumentStatus     @default(PENDING)
+  error            String?                    @db.Text
+  uploadedByUserId String?
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  uploadedByUser User?           @relation("IngestedDocumentUploader", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+  chunks         DocumentChunk[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId, status])
+}
+
+model DocumentChunk {
+  id                 String @id @default(cuid())
+  ingestedDocumentId String
+  organizationId     String
+  chunkIndex         Int
+  content            String @db.Text
+  tokenCount         Int?
+
+  ingestedDocument IngestedDocument @relation(fields: [ingestedDocumentId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([ingestedDocumentId])
+  @@index([organizationId])
+}
+
+enum EmbeddingProvider {
+  OPENAI
+  VOYAGE
+  COHERE
+  BGE
+  JINA
+}
+
+enum EmbeddingSourceType {
+  KNOWLEDGE_ARTICLE
+  AGENT_MEMORY
+  DOCUMENT_CHUNK
+}
+
+// vector is stored as a plain Float[] (a real, always-populated Postgres
+// array column) rather than an Unsupported("vector(n)") pgvector column,
+// because the `vector` Postgres extension is not installed in every
+// deployment target — this column always works with zero extra
+// infrastructure. src/lib/rag/vector-store.ts detects at runtime whether
+// pgvector is actually available (`SELECT 1 FROM pg_extension WHERE
+// extname='vector'`) and, if so, ALSO maintains a native
+// `document_chunk_embedding_vector`-style side table (see
+// prisma/optional-pgvector-upgrade.sql) for fast ANN search — this Float[]
+// column is the one column every retrieval path can always fall back to,
+// so it is never optional and never left stale.
+model Embedding {
+  id             String              @id @default(cuid())
+  organizationId String
+  sourceType     EmbeddingSourceType
+  sourceId       String
+  provider       EmbeddingProvider
+  model          String
+  dimensions     Int
+  vector         Float[]
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([sourceType, sourceId, provider])
+  @@index([organizationId, sourceType])
+}
+
+// ===== Knowledge Graph =====
+
+enum GraphEntityType {
+  CLIENT
+  COMPANY
+  PROJECT
+  EMPLOYEE
+  MEETING
+  TASK
+  DOCUMENT
+  EMAIL
+  DEAL
+  AI_DECISION
+  KNOWLEDGE_ARTICLE
+}
+
+model KnowledgeGraphNode {
+  id             String          @id @default(cuid())
+  organizationId String
+  entityType     GraphEntityType
+  entityId       String
+  label          String
+  metadata       Json?
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  outgoing     Relationship[] @relation("FromNode")
+  incoming     Relationship[] @relation("ToNode")
+
+  createdAt DateTime @default(now())
+
+  @@unique([organizationId, entityType, entityId])
+  @@index([organizationId, entityType])
+}
+
+enum RelationshipType {
+  WORKS_ON
+  OWNS
+  BELONGS_TO
+  ATTENDED
+  MENTIONS
+  RELATED_TO
+  DECIDED_IN
+  ASSIGNED_TO
+  AUTHORED
+}
+
+model Relationship {
+  id             String           @id @default(cuid())
+  organizationId String
+  fromNodeId     String
+  toNodeId       String
+  type           RelationshipType
+  weight         Float?           @default(1)
+  metadata       Json?
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  fromNode     KnowledgeGraphNode @relation("FromNode", fields: [fromNodeId], references: [id], onDelete: Cascade)
+  toNode       KnowledgeGraphNode @relation("ToNode", fields: [toNodeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([fromNodeId])
+  @@index([toNodeId])
+}
+
+// ===== RAG answer grounding, search history, bookmarks =====
+
+// One row per (source chunk/article/memory) an AI answer or search result
+// actually drew from — queryId groups every Citation belonging to one
+// answer/search turn so the UI can render "Sources" together.
+model Citation {
+  id             String              @id @default(cuid())
+  organizationId String
+  queryId        String
+  sourceType     EmbeddingSourceType
+  sourceId       String
+  snippet        String              @db.Text
+  relevanceScore Float
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, queryId])
+}
+
+model SearchHistory {
+  id               String  @id @default(cuid())
+  organizationId   String
+  userId           String
+  query            String
+  resultCount      Int
+  isSemanticSearch Boolean @default(false)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, userId])
+  @@index([organizationId, createdAt])
+}
+
+enum BookmarkKind {
+  BOOKMARK
+  FAVORITE
+}
+
+// targetType/targetId is app-enforced semi-polymorphic, same convention as
+// Comment's docKind/docId above — covers both "Bookmarks" and "Favorites"
+// from the spec via `kind`, rather than two near-identical tables.
+enum BookmarkableType {
+  KNOWLEDGE_ARTICLE
+  DEAL
+  PROJECT
+  COMPANY
+  CONTACT
+  DOCUMENT
+  MEETING
+  INGESTED_DOCUMENT
+  AGENT_MEMORY
+}
+
+model Bookmark {
+  id             String           @id @default(cuid())
+  organizationId String
+  userId         String
+  kind           BookmarkKind
+  targetType     BookmarkableType
+  targetId       String
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, kind, targetType, targetId])
+  @@index([organizationId, userId])
+}
+
+enum AutomationTrigger {
+  LEAD_CREATED
+  TASK_COMPLETED
+  MEETING_ENDED
+  DECISION_MADE
+  DEAL_STAGE_CHANGED
+  DEAL_WON
+  DEAL_LOST
+  TASK_OVERDUE
+  PROPOSAL_ACCEPTED
+  PROPOSAL_REJECTED
+  CONTRACT_SIGNED
+  INVOICE_PAID
+  INVOICE_OVERDUE
+  // Added for the Workflow Automation Engine (Phase 16) — everything else
+  // above is reused as-is by Workflow.triggerType, not duplicated.
+  LEAD_UPDATED
+  PROJECT_CREATED
+  CLIENT_MESSAGE
+  MEETING_SCHEDULED
+  WEBHOOK_RECEIVED
+  TIMER
+  CRON
+  MANUAL
+}
+
+enum AutomationAction {
+  CREATE_TASK
+  SEND_NOTIFICATION
+  ASSIGN_AGENT
+}
+
+model AutomationRule {
+  id             String            @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?           @db.Text
+  trigger        AutomationTrigger
+  action         AutomationAction
+  actionConfig   Json
+  active         Boolean           @default(true)
+  runCount       Int               @default(0)
+  lastRunAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+}
+
+enum BillingPlan {
+  FREE
+  STARTER
+  GROWTH
+  ENTERPRISE
+}
+
+enum BillingStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  // Added in Phase 18 (platform Subscription/Billing/Payment Gateway) —
+  // real gateway-driven lifecycle states the old 3-value enum never needed
+  // back when this was just a self-service, no-charge plan/seat label.
+  TRIALING
+  PAUSED
+  INCOMPLETE
+}
+
+// Phase 18 additions below (stripeCustomerId onward) turn this from a plain
+// plan/seat label into a real platform-billing anchor — every new
+// gateway/period/trial field is nullable and every new relation is
+// optional-on-this-side, so the pre-existing self-service plan switcher
+// (src/app/dashboard/billing/actions.ts's updateBillingPlan, still keying
+// off `plan`/`seatsIncluded` exactly as before) keeps working unchanged for
+// organizations that never touch real payment processing.
+model BillingAccount {
+  id             String        @id @default(cuid())
+  organizationId String        @unique
+  plan           BillingPlan   @default(FREE)
+  status         BillingStatus @default(ACTIVE)
+  seatsIncluded  Int           @default(5)
+  renewsAt       DateTime?
+
+  // Real platform plan (Phase 18) — distinct from the legacy `plan` enum
+  // above, which stays wired to the existing free self-service switcher.
+  // A gateway-driven subscription sets `currentPlanId`; `plan` is kept in
+  // sync as a best-effort human-readable label, never the source of truth
+  // once `currentPlanId` is set.
+  currentPlanId String?
+  currentPlan   Plan?   @relation(fields: [currentPlanId], references: [id], onDelete: SetNull)
+
+  gatewayProvider       PaymentGatewayProvider?
+  gatewayCustomerId     String?
+  gatewaySubscriptionId String?
+  currentPeriodStart    DateTime?
+  currentPeriodEnd      DateTime?
+  trialEndsAt           DateTime?
+  cancelAtPeriodEnd     Boolean                 @default(false)
+  canceledAt            DateTime?
+  pausedAt              DateTime?
+
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoices          PlatformInvoice[]
+  payments          PlatformPayment[]
+  paymentMethods    PaymentMethod[]
+  billingAddress    BillingAddress?
+  taxProfile        TaxProfile?
+  usageRecords      UsageRecord[]
+  aiUsageEvents     AIUsageEvent[]
+  aiCreditLedger    AICreditLedger?
+  couponRedemptions CouponRedemption[]
+  licenses          License[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ===== Phase 18: Subscription, Billing, Payment Gateway, White Label & Reseller Platform =====
+
+enum PlanTier {
+  FREE
+  STARTER
+  PROFESSIONAL
+  BUSINESS
+  ENTERPRISE
+  CUSTOM
+}
+
+enum BillingIntervalUnit {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+  LIFETIME
+}
+
+enum PlanStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+// Real, database-driven plan catalog — distinct from the legacy hardcoded
+// PLAN_SEATS map in billing/actions.ts. Nullable limit fields mean
+// "unlimited" (never a magic-number sentinel like -1 or 0, which would be
+// ambiguous with a genuine zero-allowance plan).
+model Plan {
+  id              String              @id @default(cuid())
+  tier            PlanTier
+  name            String
+  description     String?
+  // Real gateway product/price ids this plan maps to, keyed by provider,
+  // e.g. {"STRIPE": "price_123", "RAZORPAY": "plan_abc"} — populated once
+  // an operator creates the matching Price/Plan object on each gateway's
+  // own dashboard/API; a provider absent from this map simply isn't
+  // purchasable via that gateway yet, never a fabricated id.
+  gatewayPriceIds Json?
+  interval        BillingIntervalUnit
+  priceCents      Int
+  currency        String              @default("USD")
+  trialDays       Int                 @default(0)
+  status          PlanStatus          @default(ACTIVE)
+  isCustom        Boolean             @default(false)
+
+  userLimit             Int?
+  workspaceLimit        Int?
+  aiCreditsMonthly      Int?
+  storageMbLimit        Int?
+  projectLimit          Int?
+  clientLimit           Int?
+  automationRunsMonthly Int?
+  knowledgeBaseMbLimit  Int?
+  apiCallsMonthly       Int?
+  whiteLabelAccess      Boolean @default(false)
+  customDomainAccess    Boolean @default(false)
+  prioritySupport       Boolean @default(false)
+  ssoAccess             Boolean @default(false)
+  advancedAnalytics     Boolean @default(false)
+
+  features        PlanFeature[]
+  billingAccounts BillingAccount[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tier, interval, currency])
+}
+
+// Per-plan feature toggles keyed by the same `key` FeatureFlag uses — lets
+// isFeatureEnabled() (src/lib/billing/feature-flags.ts) resolve "does this
+// org's plan include X" without a giant switch statement over PlanTier.
+model PlanFeature {
+  id      String  @id @default(cuid())
+  planId  String
+  key     String
+  enabled Boolean @default(true)
+
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, key])
+}
+
+enum PaymentGatewayProvider {
+  STRIPE
+  RAZORPAY
+  PAYPAL
+  PADDLE
+  LEMONSQUEEZY
+  BANK_TRANSFER
+  MANUAL
+}
+
+enum PlatformInvoiceType {
+  TAX
+  PROFORMA
+  CREDIT_NOTE
+  DEBIT_NOTE
+  RECEIPT
+  RECURRING
+}
+
+enum PlatformInvoiceStatus {
+  DRAFT
+  OPEN
+  PAID
+  VOID
+  UNCOLLECTIBLE
+  REFUNDED
+}
+
+// Platform-level invoice (KVL GrowthOS billing a tenant organization for
+// platform access) — a deliberately separate model/number sequence from
+// the pre-existing client-facing `Invoice` (that one is an organization
+// billing ITS OWN clients; conflating the two would leak platform billing
+// data into a tenant's own CRM invoice list and vice versa).
+model PlatformInvoice {
+  id               String                @id @default(cuid())
+  organizationId   String
+  billingAccountId String
+  invoiceNumber    String                @unique
+  type             PlatformInvoiceType   @default(TAX)
+  status           PlatformInvoiceStatus @default(DRAFT)
+  currency         String
+  subtotalCents    Int                   @default(0)
+  taxCents         Int                   @default(0)
+  discountCents    Int                   @default(0)
+  totalCents       Int                   @default(0)
+  amountPaidCents  Int                   @default(0)
+  dueDate          DateTime?
+  issuedAt         DateTime              @default(now())
+  paidAt           DateTime?
+  voidedAt         DateTime?
+  gatewayInvoiceId String?
+  pdfStorageKey    String?               @db.Text
+  notes            String?               @db.Text
+
+  organization   Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  billingAccount BillingAccount        @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+  items          PlatformInvoiceItem[]
+  payments       PlatformPayment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([billingAccountId, status])
+}
+
+model PlatformInvoiceItem {
+  id              String @id @default(cuid())
+  invoiceId       String
+  description     String
+  quantity        Float  @default(1)
+  unitAmountCents Int
+  amountCents     Int
+  order           Int    @default(0)
+
+  invoice PlatformInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+enum PlatformPaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+model PlatformPayment {
+  id                  String                 @id @default(cuid())
+  organizationId      String
+  billingAccountId    String
+  invoiceId           String?
+  provider            PaymentGatewayProvider
+  status              PlatformPaymentStatus  @default(PENDING)
+  amountCents         Int
+  currency            String
+  gatewayPaymentId    String?
+  gatewayChargeId     String?
+  failureReason       String?                @db.Text
+  refundedAmountCents Int                    @default(0)
+  paidAt              DateTime?
+
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  billingAccount BillingAccount   @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+  invoice        PlatformInvoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([billingAccountId, status])
+  @@index([gatewayPaymentId])
+}
+
+enum PaymentMethodType {
+  CARD
+  BANK_ACCOUNT
+  PAYPAL
+  MANUAL
+}
+
+model PaymentMethod {
+  id                     String                 @id @default(cuid())
+  billingAccountId       String
+  provider               PaymentGatewayProvider
+  type                   PaymentMethodType
+  gatewayPaymentMethodId String?
+  brand                  String?
+  last4                  String?
+  expiryMonth            Int?
+  expiryYear             Int?
+  isDefault              Boolean                @default(false)
+
+  billingAccount BillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([billingAccountId])
+}
+
+model BillingAddress {
+  id               String  @id @default(cuid())
+  billingAccountId String  @unique
+  legalName        String?
+  line1            String?
+  line2            String?
+  city             String?
+  state            String?
+  postalCode       String?
+  country          String?
+  taxId            String?
+
+  billingAccount BillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+
+  updatedAt DateTime @updatedAt
+}
+
+enum TaxRuleType {
+  GST
+  VAT
+  SALES_TAX
+  NONE
+}
+
+// One real rate per billing account, resolved at subscribe/renew time from
+// src/lib/billing/tax-rates.ts's static country/region table (documented
+// there as approximate, real-world rates that need periodic review — never
+// a fabricated placeholder percentage).
+model TaxProfile {
+  id               String      @id @default(cuid())
+  billingAccountId String      @unique
+  country          String
+  region           String?
+  taxRuleType      TaxRuleType @default(NONE)
+  taxRatePercent   Float       @default(0)
+  taxId            String?
+  reverseCharge    Boolean     @default(false)
+
+  billingAccount BillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+
+  updatedAt DateTime @updatedAt
+}
+
+enum UsageMetricType {
+  AI_TOKENS
+  API_CALLS
+  STORAGE_MB
+  PROJECTS
+  CRM_RECORDS
+  AUTOMATION_RUNS
+  KNOWLEDGE_BASE_MB
+  USERS
+  WORKSPACES
+  BANDWIDTH_MB
+}
+
+// Append-only usage ledger — real, timestamped events, never overwritten.
+// src/lib/billing/usage-metering.ts aggregates these per period (cached in
+// Redis for fast enforcement checks) rather than maintaining a separately
+// mutable running counter that could drift from the real event log.
+model UsageRecord {
+  id               String          @id @default(cuid())
+  organizationId   String
+  billingAccountId String
+  metricType       UsageMetricType
+  quantity         Float
+  periodStart      DateTime
+  periodEnd        DateTime
+  metadata         Json?
+
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  billingAccount BillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, metricType, periodStart])
+  @@index([billingAccountId, metricType])
+}
+
+enum AIUsageProvider {
+  ANTHROPIC
+  OPENAI
+  GOOGLE_GEMINI
+  GROQ
+  EMBEDDING
+}
+
+// One real row per AI call this session instruments (src/lib/ai/agent-runtime.ts,
+// src/lib/rag/embeddings.ts) — inputTokens/outputTokens are the model's own
+// real, reported usage (response.usage.input_tokens/output_tokens), never
+// estimated. creditsUsed is derived via src/lib/billing/ai-credits.ts's
+// documented per-provider conversion table.
+model AIUsageEvent {
+  id               String          @id @default(cuid())
+  organizationId   String
+  billingAccountId String
+  provider         AIUsageProvider
+  model            String
+  inputTokens      Int             @default(0)
+  outputTokens     Int             @default(0)
+  creditsUsed      Float
+  context          String?
+
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  billingAccount BillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([billingAccountId, provider])
+}
+
+// One row per BillingAccount — the real, current AI-credit balance
+// (monthly allotment reset each period + any separately purchased
+// top-up), read on every AI call before it's allowed to proceed.
+model AICreditLedger {
+  id                        String    @id @default(cuid())
+  billingAccountId          String    @unique
+  monthlyCreditsGranted     Float     @default(0)
+  monthlyCreditsUsed        Float     @default(0)
+  purchasedCreditsRemaining Float     @default(0)
+  periodResetAt             DateTime?
+
+  billingAccount BillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+
+  updatedAt DateTime @updatedAt
+}
+
+// Global feature registry + per-org manual overrides — resolution order in
+// isFeatureEnabled() is: OrganizationFeatureOverride (if any) → the org's
+// current Plan's PlanFeature (if any) → FeatureFlag.defaultEnabled. Lets an
+// operator flip a feature on for one org (a beta tester, a support
+// workaround) without touching that org's plan.
+model FeatureFlag {
+  id             String  @id @default(cuid())
+  key            String  @unique
+  name           String
+  description    String?
+  defaultEnabled Boolean @default(false)
+
+  overrides OrganizationFeatureOverride[]
+
+  createdAt DateTime @default(now())
+}
+
+model OrganizationFeatureOverride {
+  id             String  @id @default(cuid())
+  organizationId String
+  featureFlagId  String
+  enabled        Boolean
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  featureFlag  FeatureFlag  @relation(fields: [featureFlagId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, featureFlagId])
+}
+
+enum CouponType {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
+
+// Covers both "Coupon Management" and "Promo Codes" from the spec via one
+// model — `code` IS the promo code a customer types in; there is no
+// separate underlying-rule-vs-human-code split (mirrors how Stripe itself
+// models a coupon plus a human-friendly promotion code as the same
+// concept for a system this size).
+model Coupon {
+  id              String     @id @default(cuid())
+  code            String     @unique
+  type            CouponType
+  value           Float
+  currency        String?
+  maxRedemptions  Int?
+  redemptionCount Int        @default(0)
+  expiresAt       DateTime?
+  active          Boolean    @default(true)
+
+  redemptions CouponRedemption[]
+
+  createdAt DateTime @default(now())
+}
+
+model CouponRedemption {
+  id               String   @id @default(cuid())
+  couponId         String
+  billingAccountId String
+  redeemedAt       DateTime @default(now())
+
+  coupon         Coupon         @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  billingAccount BillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([couponId, billingAccountId])
+}
+
+enum PartnerStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+}
+
+model Partner {
+  id                    String        @id @default(cuid())
+  userId                String        @unique
+  referralCode          String        @unique
+  status                PartnerStatus @default(PENDING)
+  commissionRatePercent Float         @default(20)
+
+  user                  User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  referredOrganizations Organization[] @relation("ReferredByPartner")
+  commissions           Commission[]
+  payouts               Payout[]
+
+  createdAt DateTime @default(now())
+}
+
+enum CommissionStatus {
+  PENDING
+  APPROVED
+  PAID
+  VOID
+}
+
+model Commission {
+  id             String           @id @default(cuid())
+  partnerId      String
+  organizationId String
+  amountCents    Int
+  currency       String
+  status         CommissionStatus @default(PENDING)
+  payoutId       String?
+
+  partner Partner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  payout  Payout? @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([partnerId, status])
+}
+
+model Payout {
+  id          String    @id @default(cuid())
+  partnerId   String
+  amountCents Int
+  currency    String
+  status      String    @default("PENDING")
+  paidAt      DateTime?
+
+  partner     Partner      @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  commissions Commission[]
+
+  createdAt DateTime @default(now())
+}
+
+enum LicenseType {
+  API
+  SEAT
+  ENTERPRISE
+}
+
+enum LicenseStatus {
+  ACTIVE
+  EXPIRED
+  REVOKED
+}
+
+model License {
+  id               String        @id @default(cuid())
+  organizationId   String
+  billingAccountId String
+  type             LicenseType
+  key              String        @unique
+  status           LicenseStatus @default(ACTIVE)
+  seats            Int?
+  issuedAt         DateTime      @default(now())
+  expiresAt        DateTime?
+  activatedAt      DateTime?
+  lastVerifiedAt   DateTime?
+
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  billingAccount BillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+}
+
+model WhiteLabelSettings {
+  id                  String  @id @default(cuid())
+  organizationId      String  @unique
+  brandName           String?
+  logoStorageKey      String? @db.Text
+  faviconStorageKey   String? @db.Text
+  primaryColor        String?
+  secondaryColor      String?
+  fontFamily          String?
+  customLoginHeadline String?
+  emailFromName       String?
+  emailFromAddress    String?
+  pdfFooterText       String?
+  // Free-form overrides for specific email/notification templates this org
+  // has customized, keyed by template name — a full per-template model
+  // would be premature normalization before more than a couple of real
+  // templates need it.
+  templateOverrides   Json?
+  enabled             Boolean @default(false)
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  domains      CustomDomain[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum DomainVerificationStatus {
+  PENDING
+  VERIFIED
+  FAILED
+}
+
+model CustomDomain {
+  id                   String                   @id @default(cuid())
+  whiteLabelSettingsId String
+  domain               String                   @unique
+  verificationToken    String
+  status               DomainVerificationStatus @default(PENDING)
+  verifiedAt           DateTime?
+  sslIssuedAt          DateTime?
+
+  whiteLabelSettings WhiteLabelSettings @relation(fields: [whiteLabelSettingsId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([whiteLabelSettingsId])
+}
+
+enum MarketplaceCategory {
+  INTEGRATION
+  TEMPLATE
+  AGENT_PACK
+}
+
+enum MarketplaceListingStatus {
+  AVAILABLE
+  COMING_SOON
+}
+
+// Global catalog — not per-organization. Seeded with genuine roadmap items,
+// each honestly marked AVAILABLE or COMING_SOON; no fake "installed" state.
+model MarketplaceListing {
+  id            String                   @id @default(cuid())
+  name          String
+  description   String                   @db.Text
+  category      MarketplaceCategory
+  status        MarketplaceListingStatus @default(COMING_SOON)
+  icon          String?
+  interestCount Int                      @default(0)
+
+  interests MarketplaceInterest[]
+
+  createdAt DateTime @default(now())
+}
+
+model MarketplaceInterest {
+  id             String @id @default(cuid())
+  listingId      String
+  organizationId String
+  userId         String
+
+  listing      MarketplaceListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User               @relation("MarketplaceInterestUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([listingId, organizationId])
+}
+
+// Daily snapshot of headline metrics — nothing else in the schema stores
+// history, so Analytics trend charts would otherwise have no historical
+// basis. Populated lazily (upserted for "today" on Analytics/Dashboard load)
+// rather than via a cron job, since no job runner exists.
+model MetricSnapshot {
+  id                 String   @id @default(cuid())
+  organizationId     String
+  date               DateTime @db.Date
+  companyHealthScore Int
+  revenueMonthToDate Float
+  leadsCount         Int
+  dealsCount         Int
+  pipelineValue      Float
+  // Real recurring-revenue figures — 0 (not null) when no Subscription rows
+  // exist yet, same "real zero, never fabricated" discipline as every other
+  // field here. Computed by src/lib/revenue/subscriptions.ts.
+  mrr                Float    @default(0)
+  arr                Float    @default(0)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([organizationId, date])
+}
+
+// ============================= Phase 6: Lead Finder & Company Intelligence =============================
+
+enum LeadScoreBand {
+  HOT
+  WARM
+  COLD
+}
+
+// Latest score only (not history) — re-scoring upserts this row. All 9
+// sub-scores and the overall are deterministic, computed from real stored
+// fields (see src/lib/lead-scoring.ts) — never a per-company AI call.
+model LeadScore {
+  id                   String        @id @default(cuid())
+  companyId            String        @unique
+  industryMatchScore   Int
+  companySizeScore     Int
+  growthScore          Int
+  technologyFitScore   Int
+  opportunitySizeScore Int
+  budgetPotentialScore Int
+  locationScore        Int
+  digitalMaturityScore Int
+  automationNeedScore  Int
+  overallScore         Int
+  band                 LeadScoreBand
+  scoredAt             DateTime      @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+}
+
+// One row per AI Company Intelligence report generation — kept as a log
+// (not upserted) so past reports remain visible; the UI shows the latest.
+// Every field here is real Claude output, always rendered labeled
+// "AI-generated" in the UI, never presented as verified fact.
+model CompanyIntelligence {
+  id                     String   @id @default(cuid())
+  companyId              String
+  businessSummary        String   @db.Text
+  productsSummary        String?  @db.Text
+  servicesSummary        String?  @db.Text
+  techStackSummary       String?  @db.Text
+  digitalPresenceSummary String?  @db.Text
+  seoOverview            String?  @db.Text
+  performanceOverview    String?  @db.Text
+  growthSignals          String[]
+  hiringSignals          String[]
+  expansionIndicators    String[]
+  businessOpportunities  String[]
+  estimatedSoftwareNeeds String[]
+  potentialPainPoints    String[]
+  recommendedSolution    String?  @db.Text
+  estimatedProjectValue  Float?
+  confidenceScore        Float
+  generatedByAgentId     String?
+
+  company          Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  generatedByAgent AIAgentInstance? @relation(fields: [generatedByAgentId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId, createdAt])
+}
+
+enum ResearchTopic {
+  COMPETITORS
+  TECHNOLOGY
+  BUSINESS_MODEL
+  EXPANSION
+  NEWS
+  HIRING_TRENDS
+  PUBLIC_SIGNALS
+  GENERAL
+}
+
+// AI Research Engine's on-demand, topic-scoped structured research notes —
+// distinct from the broader CompanyIntelligence report above.
+model ResearchNote {
+  id                 String        @id @default(cuid())
+  companyId          String
+  topic              ResearchTopic
+  content            String        @db.Text
+  generatedByAgentId String?
+
+  company          Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  generatedByAgent AIAgentInstance? @relation(fields: [generatedByAgentId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId, createdAt])
+}
+
+enum CompanyTimelineEventType {
+  CREATED
+  FUNDING
+  WEBSITE_UPDATE
+  ANNOUNCEMENT
+  HIRING
+  EXPANSION
+  RESEARCH_NOTE
+  INTERNAL_ACTIVITY
+}
+
+enum TimelineEventSource {
+  SYSTEM
+  AI_RESEARCH
+  MANUAL
+}
+
+// Real per-company event log — the explicit verified (SYSTEM) vs AI-inferred
+// (AI_RESEARCH) vs user-entered (MANUAL) distinction the brief requires.
+model CompanyTimelineEvent {
+  id          String                   @id @default(cuid())
+  companyId   String
+  type        CompanyTimelineEventType
+  title       String
+  description String?                  @db.Text
+  source      TimelineEventSource
+  occurredAt  DateTime
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId, occurredAt])
+}
+
+model Watchlist {
+  id              String  @id @default(cuid())
+  organizationId  String
+  name            String
+  description     String? @db.Text
+  createdByUserId String
+  icon            String?
+
+  organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdByUser User               @relation(fields: [createdByUserId], references: [id], onDelete: Cascade)
+  companies     WatchlistCompany[]
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+}
+
+model WatchlistCompany {
+  id            String @id @default(cuid())
+  watchlistId   String
+  companyId     String
+  addedByUserId String
+
+  watchlist   Watchlist @relation(fields: [watchlistId], references: [id], onDelete: Cascade)
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  addedByUser User      @relation(fields: [addedByUserId], references: [id], onDelete: Cascade)
+
+  addedAt DateTime @default(now())
+
+  @@unique([watchlistId, companyId])
+}
+
+model SavedSearch {
+  id              String    @id @default(cuid())
+  organizationId  String
+  userId          String
+  name            String
+  // The full discovery filter object (see discoveryFiltersSchema) — re-run
+  // verbatim by runSavedSearch.
+  filters         Json
+  notifyOnMatch   Boolean   @default(false)
+  lastRunAt       DateTime?
+  lastResultCount Int?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, userId])
+}
+
+enum RecommendationType {
+  BEST_OPPORTUNITY
+  HIGHEST_VALUE_LEAD
+  MOST_ACTIVE_COMPANY
+  FASTEST_GROWING_COMPANY
+  RECOMMENDED_INDUSTRY
+  SUGGESTED_NEXT_STEP
+  BETTER_PRICING
+  ADDITIONAL_SERVICES
+  UPSELL_OPPORTUNITY
+  CROSS_SELL_OPPORTUNITY
+  BETTER_TIMELINE
+  RISK_WARNING
+  SCOPE_IMPROVEMENT
+  PROPOSAL_QUALITY_IMPROVEMENT
+  COMPETITIVE_ADVANTAGE
+  // Added for the AI Delivery Board (Phase 5) — a deliberate catch-all for
+  // delivery/QA/DevOps concerns, mirroring how SCOPE_IMPROVEMENT/
+  // PROPOSAL_QUALITY_IMPROVEMENT were added narrowly for the Review Board.
+  DELIVERY_RECOMMENDATION
+}
+
+// Same shape as Insight, deliberately kept separate — scoped specifically to
+// company/lead intelligence rather than org-wide health. Also reused by the
+// AI Proposal Review Board: each agent's structured recommendations[] are
+// flattened into real rows here after a review round, linked via
+// relatedMeetingId plus whichever doc-kind FK applies.
+model Recommendation {
+  id                 String             @id @default(cuid())
+  organizationId     String
+  type               RecommendationType
+  title              String
+  description        String             @db.Text
+  relatedCompanyId   String?
+  relatedProposalId  String?
+  relatedQuotationId String?
+  relatedContractId  String?
+  relatedInvoiceId   String?
+  relatedMeetingId   String?
+  relatedProjectId   String?
+
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  relatedCompany   Company?     @relation(fields: [relatedCompanyId], references: [id], onDelete: SetNull)
+  relatedProposal  Proposal?    @relation(fields: [relatedProposalId], references: [id], onDelete: SetNull)
+  relatedQuotation Quotation?   @relation(fields: [relatedQuotationId], references: [id], onDelete: SetNull)
+  relatedContract  Contract?    @relation(fields: [relatedContractId], references: [id], onDelete: SetNull)
+  relatedInvoice   Invoice?     @relation(fields: [relatedInvoiceId], references: [id], onDelete: SetNull)
+  relatedMeeting   Meeting?     @relation(fields: [relatedMeetingId], references: [id], onDelete: SetNull)
+  relatedProject   Project?     @relation(fields: [relatedProjectId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+}
+
+// ============================= Phase 8: AI Website Scanner & Opportunity Engine =============================
+
+enum ScanStatus {
+  PENDING
+  SCANNING
+  COMPLETED
+  FAILED
+}
+
+enum TechnologyCategory {
+  FRONTEND
+  BACKEND
+  CMS
+  ECOMMERCE
+  HOSTING
+  CDN
+  ANALYTICS
+  OTHER
+}
+
+enum OpportunityBand {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum ConfidenceLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum RecommendationCategory {
+  ERP
+  CRM
+  HRMS
+  HOSPITAL_MANAGEMENT
+  SCHOOL_ERP
+  INVENTORY
+  POS
+  BILLING
+  ACCOUNTING
+  WAREHOUSE
+  AI_CHATBOT
+  CUSTOMER_PORTAL
+  VENDOR_PORTAL
+  EMPLOYEE_PORTAL
+  MOBILE_APP
+  ADMIN_PANEL
+  ANALYTICS_DASHBOARD
+  WORKFLOW_AUTOMATION
+  API_INTEGRATION
+  CLOUD_MIGRATION
+}
+
+// A real, server-side scan of a live website — never a fabricated report.
+// companyId is optional: a scan can stand alone (not yet a CRM company) or be
+// linked to/promote an existing Company, mirroring Client.companyId's
+// optional-relation convention.
+model WebsiteScan {
+  id               String     @id @default(cuid())
+  organizationId   String
+  companyId        String?
+  createdByUserId  String
+  url              String
+  finalUrl         String?
+  websiteName      String?
+  companyNameInput String?
+  industryInput    String?
+  websiteType      String?
+  status           ScanStatus @default(PENDING)
+  httpStatus       Int?
+  errorMessage     String?    @db.Text
+  scannedAt        DateTime?
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  company       Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  createdByUser User         @relation(fields: [createdByUserId], references: [id], onDelete: Cascade)
+
+  technologies     Technology[]
+  seoAudit         SEOAudit?
+  performanceAudit PerformanceAudit?
+  securityAudit    SecurityAudit?
+  uxAudit          UXAudit?
+  opportunity      Opportunity?
+  recommendations  ScanRecommendation[]
+  executiveReport  ExecutiveReport?
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+}
+
+// Every row cites its own evidence — the real header/HTML string that
+// triggered detection — never a bare guess.
+model Technology {
+  id       String             @id @default(cuid())
+  scanId   String
+  name     String
+  category TechnologyCategory
+  evidence String             @db.Text
+
+  scan WebsiteScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  @@index([scanId])
+}
+
+model SEOAudit {
+  id                     String  @id @default(cuid())
+  scanId                 String  @unique
+  metaTitle              String?
+  metaDescription        String? @db.Text
+  hasCanonical           Boolean
+  hasOpenGraph           Boolean
+  hasTwitterCard         Boolean
+  hasSchema              Boolean
+  h1Count                Int
+  headingStructureValid  Boolean
+  internalLinksCount     Int
+  externalLinksCount     Int
+  // Broken-link checking is a bounded spot-check, never an exhaustive crawl —
+  // brokenLinksChecked records how many were actually sampled, so the UI can
+  // honestly say "3 broken links found across 10 sampled" rather than imply
+  // a full-site check.
+  brokenLinksSampleCount Int
+  brokenLinksChecked     Int
+  imagesTotal            Int
+  imagesWithoutAlt       Int
+  hasSitemap             Boolean
+  hasRobotsTxt           Boolean
+  isIndexable            Boolean
+  seoScore               Int
+  findings               Json
+
+  scan WebsiteScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+}
+
+// Estimated from real static-response signals (timing, headers, structural
+// tag counts) — explicitly NOT a Lighthouse/Core Web Vitals measurement,
+// which would require a real rendered browser (not available here). Every UI
+// surface of this data must carry that disclaimer.
+model PerformanceAudit {
+  id               String  @id @default(cuid())
+  scanId           String  @unique
+  responseTimeMs   Int
+  htmlSizeBytes    Int
+  scriptTagCount   Int
+  stylesheetCount  Int
+  imageTagCount    Int
+  hasCaching       Boolean
+  hasCompression   Boolean
+  performanceScore Int
+  findings         Json
+
+  scan WebsiteScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+}
+
+model UXAudit {
+  id                  String  @id @default(cuid())
+  scanId              String  @unique
+  hasNav              Boolean
+  formCount           Int
+  ctaCount            Int
+  altTextCoveragePct  Int
+  // Real Flesch-Kincaid readability score computed on extracted visible text.
+  readabilityScore    Float
+  viewportMetaPresent Boolean
+  // Always the honest "not measured" string — real contrast checking needs
+  // rendered CSS, out of scope for a static HTML scan.
+  colorContrastNote   String
+  uxScore             Int
+  findings            Json
+
+  scan WebsiteScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+}
+
+// A high-level, non-invasive assessment (public HTTP headers/cookies/HTTPS
+// only) — never a penetration test. Always disclaimed as such in the UI.
+model SecurityAudit {
+  id                     String   @id @default(cuid())
+  scanId                 String   @unique
+  isHttps                Boolean
+  hasHsts                Boolean
+  hasCsp                 Boolean
+  hasXFrameOptions       Boolean
+  hasXContentTypeOptions Boolean
+  cookiesSecureFlag      Boolean?
+  cookiesHttpOnlyFlag    Boolean?
+  mixedContentCount      Int
+  securityScore          Int
+  findings               Json
+
+  scan WebsiteScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+}
+
+// The deterministic Opportunity Score — a documented weighted combination of
+// the 4 real audit scores, never a per-scan AI call (same rationale as
+// LeadScore: fast, cheap, transparent formula).
+model Opportunity {
+  id                      String          @id @default(cuid())
+  scanId                  String          @unique
+  digitalScore            Int
+  automationScore         Int
+  growthScore             Int
+  aiReadinessScore        Int
+  seoScore                Int
+  performanceScore        Int
+  securityScore           Int
+  uxScore                 Int
+  overallOpportunityScore Int
+  band                    OpportunityBand
+  estimatedValueMin       Float?
+  estimatedValueMax       Float?
+  estimatedTimeline       String?
+  confidenceLevel         ConfidenceLevel
+  computedAt              DateTime        @default(now())
+
+  scan WebsiteScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+}
+
+// Named ScanRecommendation (not Recommendation) to avoid colliding with the
+// existing Lead-Intelligence Recommendation model, which is a distinct
+// org-wide concept.
+model ScanRecommendation {
+  id        String                 @id @default(cuid())
+  scanId    String
+  category  RecommendationCategory
+  title     String
+  rationale String                 @db.Text
+  priority  MessagePriority        @default(NORMAL)
+
+  scan WebsiteScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([scanId])
+}
+
+// The AI-composed narrative sitting on top of the verified audits — one real
+// Claude call reasoning strictly over the real findings above (see
+// src/lib/scanner/ai-report-generator.ts). Always badged "AI-generated" in
+// the UI, never presented as a verified fact.
+model ExecutiveReport {
+  id                         String   @id @default(cuid())
+  scanId                     String   @unique
+  executiveSummary           String   @db.Text
+  strengths                  String[]
+  weaknesses                 String[]
+  businessOpportunities      String[]
+  technologyOverview         String   @db.Text
+  seoFindingsSummary         String   @db.Text
+  performanceFindingsSummary String   @db.Text
+  securityObservations       String   @db.Text
+  uxFindings                 String   @db.Text
+  businessImpact             String   @db.Text
+  nextSteps                  String[]
+  generatedByAgentId         String?
+
+  scan             WebsiteScan      @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  generatedByAgent AIAgentInstance? @relation(fields: [generatedByAgentId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+}
+
+// ============================= Audit log =============================
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  userId         String?
+  organizationId String?
+  action         String
+  ipAddress      String?
+  userAgent      String?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  // Hash chain (see src/lib/audit-chain-verify.ts): `previousHash` is the
+  // `hash` of the prior AuditLog row in the same organizationId scope (or
+  // the literal genesis value for the first row in that scope); `hash` is
+  // sha256(previousHash + canonicalized row content), computed by
+  // logAudit() at write time. This makes a row edited/deleted directly in
+  // the database — bypassing logAudit()'s create-only application code —
+  // detectable by re-walking the chain, since it breaks the hash link to
+  // every row written after it. It is NOT a database-level append-only
+  // guarantee: a privileged DB user can still rewrite a row AND every
+  // hash after it to make the chain re-verify, so this is tamper-evidence
+  // against accidental or narrowly-scoped tampering, not a cryptographic
+  // guarantee against a fully compromised database.
+  previousHash String?
+  hash         String?
+
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([action])
+}
+
+// ============================= Phase 9: AI Outreach Assistant =============================
+
+enum CampaignType {
+  STANDARD
+  INDUSTRY
+  COUNTRY
+  CUSTOM
+  TAG_BASED
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+enum ApprovalMode {
+  MANUAL
+  SEMI_AUTOMATIC
+  AUTOMATIC
+}
+
+enum ContactStatus {
+  NEW
+  CONTACTED
+  REPLIED
+  INTERESTED
+  NOT_INTERESTED
+  MEETING_BOOKED
+  UNSUBSCRIBED
+}
+
+enum DraftChannel {
+  EMAIL
+  LINKEDIN
+}
+
+enum DraftPurpose {
+  INTRODUCTION
+  FOLLOW_UP
+  MEETING_REQUEST
+  PRODUCT_INTRODUCTION
+  PROPOSAL_REQUEST
+  CASE_STUDY
+  THANK_YOU
+  REMINDER
+  RE_ENGAGEMENT
+  CONNECTION_REQUEST
+  CONVERSATION_SUMMARY
+}
+
+enum EmailTone {
+  PROFESSIONAL
+  ENTERPRISE
+  FRIENDLY
+  FORMAL
+  CONSULTATIVE
+}
+
+enum DraftStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  QUEUED
+  SENT
+  FAILED
+  REJECTED
+  BOUNCED
+}
+
+enum ApprovalDecision {
+  PENDING
+  APPROVED
+  REJECTED
+  CHANGES_REQUESTED
+}
+
+enum OutreachMeetingStatus {
+  REQUESTED
+  CONFIRMED
+  DECLINED
+  COMPLETED
+  CANCELLED
+}
+
+enum ReplySentiment {
+  POSITIVE
+  NEUTRAL
+  NEGATIVE
+}
+
+// The person-level entity Company/Lead/Client don't have today. Lead Score /
+// Opportunity Score are deliberately NOT duplicated here — always read live
+// off the linked Company's leadScore / websiteScans[].opportunity.
+model Contact {
+  id                String        @id @default(cuid())
+  organizationId    String
+  companyId         String?
+  firstName         String
+  lastName          String?
+  email             String
+  jobTitle          String?
+  phone             String?
+  country           String?
+  city              String?
+  tags              String[]
+  ownerUserId       String?
+  status            ContactStatus @default(NEW)
+  notes             String?       @db.Text
+  linkedin          String?
+  department        String?
+  // 0-100, owner-editable on the CRM Contact detail view — a real, stored
+  // field like Task.progress, not derived from anything (there is no
+  // interaction-frequency model to compute it from honestly).
+  relationshipScore Int?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  company      Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  owner        User?        @relation("ContactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+
+  campaigns        CampaignContact[]
+  emailDrafts      EmailDraft[]
+  replies          Reply[]
+  outreachMeetings OutreachMeeting[]
+  tasks            Task[]
+  deals            Deal[]
+  reminders        Reminder[]
+  quotations       Quotation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+}
+
+model Campaign {
+  id                        String         @id @default(cuid())
+  organizationId            String
+  name                      String
+  type                      CampaignType
+  status                    CampaignStatus @default(DRAFT)
+  targetIndustry            String?
+  targetCountry             String?
+  targetCompanySize         String?
+  goal                      String?        @db.Text
+  approvalMode              ApprovalMode   @default(MANUAL)
+  // AI Campaign Planner's grounded narrative — the estimatedSuccessPotential
+  // number itself is computed deterministically (see campaign-planner.ts),
+  // never AI-invented.
+  aiPlanNotes               String?        @db.Text
+  estimatedSuccessPotential Int?
+  createdByUserId           String
+
+  organization       Organization                @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdByUser      User                        @relation(fields: [createdByUserId], references: [id], onDelete: Cascade)
+  contacts           CampaignContact[]
+  sequences          Sequence[]
+  emailDrafts        EmailDraft[]
+  replies            Reply[]
+  outreachMeetings   OutreachMeeting[]
+  analyticsSnapshots CampaignAnalyticsSnapshot[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+}
+
+model CampaignContact {
+  id         String   @id @default(cuid())
+  campaignId String
+  contactId  String
+  enrolledAt DateTime @default(now())
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact  Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, contactId])
+}
+
+// steps is an ordered array of {order, type: EMAIL|WAIT|LINKEDIN|REMINDER|MEETING_REQUEST,
+// delayDays, purpose?, tone?} — same "structured Json for a flexible ordered
+// list" convention as Widget.position / SavedSearch.filters.
+model Sequence {
+  id             String  @id @default(cuid())
+  organizationId String
+  campaignId     String?
+  name           String
+  steps          Json
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign     Campaign?    @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  emailDrafts  EmailDraft[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+}
+
+// One model covers cold email, LinkedIn drafts, follow-ups, and
+// meeting-request messages — they share one lifecycle (DRAFT ->
+// PENDING_APPROVAL -> APPROVED -> QUEUED -> SENT|FAILED|REJECTED).
+model EmailDraft {
+  id                   String       @id @default(cuid())
+  organizationId       String
+  campaignId           String?
+  contactId            String
+  sequenceId           String?
+  sequenceStepIndex    Int?
+  channel              DraftChannel
+  purpose              DraftPurpose
+  tone                 EmailTone
+  subject              String?
+  body                 String       @db.Text
+  // Which real fields were actually woven in — powers "Highlight
+  // personalization" in the preview UI, never fabricated after the fact.
+  personalizationNotes Json?
+  status               DraftStatus  @default(DRAFT)
+  abVariant            String?
+  abTestGroupId        String?
+  generatedByAgentId   String?
+  approvedByUserId     String?
+  approvedAt           DateTime?
+  queuedAt             DateTime?
+  sentAt               DateTime?
+  failedReason         String?
+  trackingToken        String?      @unique
+  openCount            Int          @default(0)
+  firstOpenedAt        DateTime?
+  clickCount           Int          @default(0)
+  firstClickedAt       DateTime?
+  // Resend's own message id (the `id` field of a successful POST
+  // https://api.resend.com/emails response), persisted at send time so the
+  // Resend webhook (src/app/api/webhooks/resend/route.ts) can correlate a
+  // later bounce/complaint event's `data.email_id` back to this draft.
+  // Never set for SMTP-sent drafts — Resend-specific.
+  resendMessageId      String?      @unique
+  // Set only from a real, signature-verified Resend webhook event
+  // (src/app/api/webhooks/resend/route.ts) — never inferred/guessed.
+  bouncedAt            DateTime?
+  bounceReason         String?
+  complainedAt         DateTime?
+  // Set once by linkedInReminderJob (src/lib/scheduler/registry.ts) after it
+  // nudges the owner about a LINKEDIN draft that's sat APPROVED/QUEUED past
+  // the reminder threshold — prevents re-reminding on every subsequent tick.
+  // Cleared implicitly once the draft reaches SENT (a fresh draft never has
+  // this set).
+  reminderSentAt       DateTime?
+
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign         Campaign?         @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  contact          Contact           @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  sequence         Sequence?         @relation(fields: [sequenceId], references: [id], onDelete: SetNull)
+  generatedByAgent AIAgentInstance?  @relation(fields: [generatedByAgentId], references: [id], onDelete: SetNull)
+  approvedByUser   User?             @relation("EmailDraftApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  approvals        Approval[]
+  replies          Reply[]
+  outreachMeetings OutreachMeeting[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([contactId])
+  @@index([campaignId])
+}
+
+// Audit trail of decisions on a draft — multiple rows per draft are allowed
+// (a "changes requested" round-trip creates a new row), never overwritten.
+model Approval {
+  id              String           @id @default(cuid())
+  organizationId  String
+  emailDraftId    String
+  requestedAt     DateTime         @default(now())
+  decidedByUserId String?
+  decision        ApprovalDecision @default(PENDING)
+  comment         String?          @db.Text
+  decidedAt       DateTime?
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  emailDraft    EmailDraft   @relation(fields: [emailDraftId], references: [id], onDelete: Cascade)
+  decidedByUser User?        @relation(fields: [decidedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([emailDraftId])
+}
+
+// Every row is a real person's manual entry of what a prospect actually
+// wrote back — never AI-fabricated. sentiment is real AI classification run
+// over that real content, always labeled AI-inferred in the UI.
+model Reply {
+  id             String          @id @default(cuid())
+  organizationId String
+  contactId      String
+  campaignId     String?
+  emailDraftId   String?
+  channel        DraftChannel
+  content        String          @db.Text
+  sentiment      ReplySentiment?
+  loggedByUserId String
+  receivedAt     DateTime        @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  campaign     Campaign?    @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  emailDraft   EmailDraft?  @relation(fields: [emailDraftId], references: [id], onDelete: SetNull)
+  loggedByUser User         @relation(fields: [loggedByUserId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([contactId])
+}
+
+// Named OutreachMeeting (not Meeting) — the AI Executive Board's internal
+// multi-agent Meeting model already owns that name.
+model OutreachMeeting {
+  id               String                @id @default(cuid())
+  organizationId   String
+  contactId        String
+  campaignId       String?
+  emailDraftId     String?
+  title            String
+  agenda           String?               @db.Text
+  discussionTopics String[]
+  proposedTimes    Json?
+  status           OutreachMeetingStatus @default(REQUESTED)
+  scheduledAt      DateTime?
+  icsGenerated     Boolean               @default(false)
+  notes            String?               @db.Text
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  campaign     Campaign?    @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  emailDraft   EmailDraft?  @relation(fields: [emailDraftId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+}
+
+// Real daily rollups per campaign — same convention as the existing
+// MetricSnapshot / ensureTodaySnapshot().
+model CampaignAnalyticsSnapshot {
+  id                   String   @id @default(cuid())
+  campaignId           String
+  date                 DateTime
+  emailsSent           Int      @default(0)
+  opensCount           Int      @default(0)
+  clicksCount          Int      @default(0)
+  repliesCount         Int      @default(0)
+  positiveRepliesCount Int      @default(0)
+  meetingsBookedCount  Int      @default(0)
+  failedCount          Int      @default(0)
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([campaignId, date])
+}
+
+// ============================= Phase 13: AI Proposal Review Board =============================
+// A BoardReview sits on top of the existing Meeting/MeetingParticipant/
+// MeetingMessage/Decision/DecisionVote engine (Phase 3: AI Executive Board)
+// — it is a thin query anchor + the two genuinely new structured analyses
+// (RiskAnalysis, ProfitAnalysis), not a parallel meeting system. docKind
+// reuses the existing DocumentKind enum; docId is polymorphic and
+// app-enforced, same convention as DocumentVersion/Signature.
+
+enum BoardReviewDecision {
+  APPROVED
+  APPROVED_WITH_CHANGES
+  NEEDS_REVISION
+  REJECTED
+}
+
+model BoardReview {
+  id                String               @id @default(cuid())
+  organizationId    String
+  meetingId         String               @unique
+  decisionId        String?              @unique
+  docKind           DocumentKind
+  docId             String
+  finalDecision     BoardReviewDecision?
+  overallConfidence Float?
+  winProbability    Float?
+  requestedByUserId String?
+
+  overriddenAt       DateTime?
+  overriddenByUserId String?
+  overrideReason     String?   @db.Text
+
+  organization     Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  meeting          Meeting         @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  decision         Decision?       @relation(fields: [decisionId], references: [id], onDelete: SetNull)
+  requestedByUser  User?           @relation("BoardReviewRequestedBy", fields: [requestedByUserId], references: [id], onDelete: SetNull)
+  overriddenByUser User?           @relation("BoardReviewOverriddenBy", fields: [overriddenByUserId], references: [id], onDelete: SetNull)
+  riskAnalysis     RiskAnalysis?
+  profitAnalysis   ProfitAnalysis?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([docKind, docId])
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// The Legal Agent's structured deep-dive for one BoardReview — real,
+// LLM-produced output (see runReviewAgentTurn's LegalReviewTurnSchema),
+// never a fabricated/default checklist.
+model RiskAnalysis {
+  id               String    @id @default(cuid())
+  boardReviewId    String    @unique
+  contractTermsOk  Boolean?
+  missingClauses   String[]
+  ndaRequired      Boolean?
+  liabilityRisk    String?   @db.Text
+  warrantyRisk     String?   @db.Text
+  complianceNotes  String?   @db.Text
+  overallRiskLevel RiskLevel @default(LOW)
+  riskFactors      String[]
+
+  boardReview BoardReview @relation(fields: [boardReviewId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+}
+
+enum PaymentRiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+// The Finance Agent's structured deep-dive for one BoardReview (see
+// runReviewAgentTurn's FinanceReviewTurnSchema).
+model ProfitAnalysis {
+  id               String           @id @default(cuid())
+  boardReviewId    String           @unique
+  estimatedRevenue Float?
+  estimatedCost    Float?
+  grossMargin      Float?
+  netMargin        Float?
+  profit           Float?
+  discountImpact   Float?
+  paymentRiskLevel PaymentRiskLevel @default(LOW)
+  paymentRiskNotes String?          @db.Text
+
+  boardReview BoardReview @relation(fields: [boardReviewId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+}
+
+// ===== Approval Policy Engine =====
+// Reusable gate (src/lib/approval-engine.ts) in front of the existing
+// "Send to client" actions from Phase 12. Deliberately minimal — future
+// phases (Projects, Billing, Enterprise Workflow Automation) extend
+// appliesToDocKinds / mode rather than rebuilding checkApprovalGate.
+
+enum ApprovalPolicyMode {
+  ADVISORY
+  APPROVAL_REQUIRED
+}
+
+model OrganizationApprovalPolicy {
+  id                 String             @id @default(cuid())
+  organizationId     String             @unique
+  mode               ApprovalPolicyMode @default(ADVISORY)
+  appliesToDocKinds  DocumentKind[]
+  allowOwnerOverride Boolean            @default(true)
+  updatedByUserId    String?
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  updatedByUser User?        @relation(fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ============================= Phase 14: Enterprise Project Management + Client Portal =============================
+// Project/Task were extended in place above (see "Phase 14" comments on
+// each). Everything below is genuinely new: the project delivery layer
+// (members/milestones/sprints/risk/time-tracking/status-change log/generic
+// comments) and a Client Portal authentication system fully isolated from
+// the internal User/Membership/Auth.js stack — separate models, separate
+// opaque-token session cookie, separate guard function. A ClientPortalUser
+// is anchored to Client (not to Projects specifically) so this same auth
+// system is reusable by future white-label portals without schema changes.
+
+enum ProjectRole {
+  PROJECT_MANAGER
+  DEVELOPER
+  DESIGNER
+  QA
+  DEVOPS
+  CONSULTANT
+  STAKEHOLDER
+}
+
+model ProjectMember {
+  id                   String      @id @default(cuid())
+  projectId            String
+  userId               String
+  organizationId       String
+  role                 ProjectRole
+  // Enables real budget-burn math from real TimeEntry data — never a
+  // fabricated cost estimate.
+  hourlyRate           Float?
+  capacityHoursPerWeek Float?
+  joinedAt             DateTime    @default(now())
+
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([organizationId])
+}
+
+enum MilestoneStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  DELAYED
+}
+
+model Milestone {
+  id                       String          @id @default(cuid())
+  projectId                String
+  name                     String
+  description              String?         @db.Text
+  dueDate                  DateTime?
+  completedAt              DateTime?
+  status                   MilestoneStatus @default(PENDING)
+  order                    Int             @default(0)
+  // Client Portal visibility — real milestones seeded on project creation
+  // default to visible; internal-only milestones can be hidden.
+  visibleToClient          Boolean         @default(true)
+  clientApprovedAt         DateTime?
+  // Real client-submitted signal, not a fabricated one — the ONLY data
+  // source anywhere in this phase for a "client satisfaction" metric.
+  clientSatisfactionRating Int?
+
+  clientApprovedByPortalUserId String?
+
+  project                    Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  clientApprovedByPortalUser ClientPortalUser? @relation(fields: [clientApprovedByPortalUserId], references: [id], onDelete: SetNull)
+  tasks                      Task[]
+
+  @@index([projectId])
+}
+
+enum SprintStatus {
+  PLANNING
+  ACTIVE
+  COMPLETED
+}
+
+model Sprint {
+  id                 String       @id @default(cuid())
+  projectId          String
+  organizationId     String
+  name               String
+  goal               String?      @db.Text
+  startDate          DateTime
+  endDate            DateTime
+  capacityHours      Float?
+  status             SprintStatus @default(PLANNING)
+  retrospectiveNotes String?      @db.Text
+
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tasks        Task[]
+
+  @@index([projectId])
+  @@index([organizationId])
+}
+
+enum ProjectRiskCategory {
+  DELAYED_TASK
+  OVER_BUDGET
+  MISSING_RESOURCE
+  BLOCKED_TASK
+  LATE_APPROVAL
+  CLIENT_RISK
+  OTHER
+  // Added for the AI Delivery Board (Phase 5).
+  DEVELOPER_OVERLOAD
+  QA_FAILURE
+  SECURITY_ISSUE
+  DEPLOYMENT_RISK
+}
+
+enum ProjectRiskStatus {
+  OPEN
+  MITIGATED
+  RESOLVED
+}
+
+// Named ProjectRisk (not Risk) to avoid confusion with the existing,
+// unrelated RiskAnalysis (the Legal Agent's per-document-review deep-dive
+// from the AI Proposal Review Board phase).
+model ProjectRisk {
+  id                String              @id @default(cuid())
+  projectId         String
+  organizationId    String
+  category          ProjectRiskCategory
+  // Reuses the existing RiskLevel enum (LOW/MEDIUM/HIGH/CRITICAL) rather
+  // than declaring a duplicate.
+  severity          RiskLevel
+  status            ProjectRiskStatus   @default(OPEN)
+  title             String
+  description       String              @db.Text
+  detectedByAgentId String?
+  relatedTaskId     String?
+  resolvedAt        DateTime?
+  createdAt         DateTime            @default(now())
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  detectedByAgent AIAgentInstance? @relation(fields: [detectedByAgentId], references: [id], onDelete: SetNull)
+  relatedTask     Task?            @relation(fields: [relatedTaskId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([organizationId])
+}
+
+// ============================= Phase 5: AI Delivery Board =============================
+
+// One real row per project per day, lazily upserted on first view each day —
+// exact shape/precedent of MetricSnapshot's ensureTodaySnapshot pattern,
+// applied per-project instead of per-org. The CURRENT score is always
+// computed fresh on read (computeProjectHealthScore); this table exists only
+// for trend history, never backfilled with fake past data points.
+model ProjectHealthSnapshot {
+  id                     String   @id @default(cuid())
+  projectId              String
+  organizationId         String
+  date                   DateTime @db.Date
+  deliveryScore          Int
+  qualityScore           Int
+  velocityScore          Int
+  riskScore              Int
+  budgetScore            Int
+  customerHappinessScore Int
+  overallScore           Int
+  createdAt              DateTime @default(now())
+
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, date])
+  @@index([organizationId, date])
+}
+
+enum DeliveryReportType {
+  DAILY
+  WEEKLY
+  MONTHLY
+  PROJECT_HEALTH
+  RISK
+}
+
+// Owner-triggered (no cron exists in this app) — a real log of "this report
+// was generated and emailed to N owners". sendEmail has no attachment
+// support, so the email body is the summary + a link back into the app,
+// never a fabricated PDF attachment.
+model DeliveryReport {
+  id              String             @id @default(cuid())
+  organizationId  String
+  projectId       String?
+  type            DeliveryReportType
+  summary         String             @db.Text
+  recipientCount  Int
+  createdByUserId String?
+  generatedAt     DateTime           @default(now())
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project       Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdByUser User?        @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([projectId])
+}
+
+enum TimeEntrySource {
+  MANUAL
+  TIMER
+  // Real browser-side idle detection (see time/_components/idle-tracker.tsx)
+  // — never a fabricated/estimated duration. AUTO is a background timer that
+  // keeps running while the tab is open and the user is active; IDLE is the
+  // segment automatically split off once the browser's idle detector fires
+  // (no keyboard/mouse activity past the threshold), so idle time is visible
+  // and editable rather than silently billed.
+  AUTO
+  IDLE
+}
+
+model TimeEntry {
+  id              String          @id @default(cuid())
+  organizationId  String
+  projectId       String
+  taskId          String?
+  userId          String
+  startedAt       DateTime
+  endedAt         DateTime?
+  // Computed on stop (or manual entry) — never hand-typed to a fabricated
+  // value while the timer is genuinely still running (null until then).
+  durationMinutes Int?
+  billable        Boolean         @default(true)
+  source          TimeEntrySource @default(MANUAL)
+  note            String?
+  createdAt       DateTime        @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task         Task?        @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([projectId])
+  @@index([taskId])
+  @@index([userId])
+}
+
+// Deterministic log of every Task.status transition — powers real sprint
+// burndown/velocity without repurposing the unstructured Activity feed or
+// the org-wide-daily-grain MetricSnapshot (neither fits). Written by every
+// task status-change action from day one, not backfilled later.
+model TaskStatusChange {
+  id             String      @id @default(cuid())
+  taskId         String
+  organizationId String
+  fromStatus     TaskStatus?
+  toStatus       TaskStatus
+  changedAt      DateTime    @default(now())
+
+  task         Task         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([organizationId, changedAt])
+}
+
+enum CommentDocKind {
+  TASK
+  PROJECT
+  MILESTONE
+  KNOWLEDGE_ARTICLE
+}
+
+// Semi-polymorphic: docKind+docId is app-enforced (same convention as
+// BoardReview/DocumentVersion/Signature elsewhere in this app), but the
+// author side is two real concrete FKs (not open-ended) since there are
+// only two kinds of comment author in this app: an internal User or a
+// portal Client.
+model Comment {
+  id                       String         @id @default(cuid())
+  organizationId           String
+  docKind                  CommentDocKind
+  docId                    String
+  authorUserId             String?
+  authorClientPortalUserId String?
+  content                  String         @db.Text
+  mentionedUserIds         String[]
+  createdAt                DateTime       @default(now())
+
+  organization           Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  authorUser             User?             @relation(fields: [authorUserId], references: [id], onDelete: SetNull)
+  authorClientPortalUser ClientPortalUser? @relation(fields: [authorClientPortalUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([docKind, docId])
+}
+
+// ===== Client Portal Authentication — fully isolated from User/Membership/Auth.js =====
+// Separate session cookie, separate opaque-token table (never a JWT, so
+// individual/bulk revocation is a plain DB update), separate device and
+// security-settings models. A portal login is only ever possible for an
+// email that matches a real Client contact — no open signup.
+
+model ClientPortalUser {
+  id              String    @id @default(cuid())
+  clientId        String
+  organizationId  String
+  email           String    @unique
+  name            String?
+  // Null until the client opts in from Security Settings — magic link is
+  // the always-available default, password is additive.
+  passwordHash    String?
+  // Stamped the first time a LOGIN magic link is successfully consumed —
+  // clicking a real emailed link IS proof of ownership.
+  emailVerifiedAt DateTime?
+  active          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  client       Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  sessions           ClientSession[]
+  devices            ClientDevice[]
+  authTokens         ClientAuthToken[]
+  securitySettings   ClientSecuritySettings?
+  comments           Comment[]
+  approvedMilestones Milestone[]
+
+  @@index([clientId])
+  @@index([organizationId])
+}
+
+enum ClientTokenPurpose {
+  LOGIN
+  EMAIL_VERIFY
+  PASSWORD_RESET
+}
+
+model ClientAuthToken {
+  id                 String             @id @default(cuid())
+  clientPortalUserId String
+  // Hashed — the raw token is only ever in the emailed URL, never stored.
+  tokenHash          String             @unique
+  purpose            ClientTokenPurpose
+  expiresAt          DateTime
+  consumedAt         DateTime?
+  createdAt          DateTime           @default(now())
+
+  clientPortalUser ClientPortalUser @relation(fields: [clientPortalUserId], references: [id], onDelete: Cascade)
+
+  @@index([clientPortalUserId])
+}
+
+model ClientDevice {
+  id                 String   @id @default(cuid())
+  clientPortalUserId String
+  // Random id persisted in a long-lived cookie — a stable per-browser
+  // identifier, NOT real hardware/browser fingerprinting.
+  fingerprint        String
+  label              String?
+  userAgent          String?
+  trusted            Boolean  @default(false)
+  firstSeenAt        DateTime @default(now())
+  lastSeenAt         DateTime @default(now())
+
+  clientPortalUser ClientPortalUser @relation(fields: [clientPortalUserId], references: [id], onDelete: Cascade)
+  sessions         ClientSession[]
+
+  @@unique([clientPortalUserId, fingerprint])
+}
+
+model ClientSession {
+  id                 String    @id @default(cuid())
+  clientPortalUserId String
+  deviceId           String?
+  // Hashed opaque session token — NOT a JWT, so "logout everywhere" and
+  // per-session revocation are plain DB updates, not a token-blacklist hack.
+  tokenHash          String    @unique
+  ipAddress          String?
+  userAgent          String?
+  // Controls expiresAt length and the cookie's Max-Age.
+  rememberMe         Boolean   @default(false)
+  expiresAt          DateTime
+  lastActiveAt       DateTime  @default(now())
+  revokedAt          DateTime?
+  createdAt          DateTime  @default(now())
+
+  clientPortalUser ClientPortalUser @relation(fields: [clientPortalUserId], references: [id], onDelete: Cascade)
+  device           ClientDevice?    @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([clientPortalUserId])
+}
+
+model ClientSecuritySettings {
+  id                 String    @id @default(cuid())
+  clientPortalUserId String    @unique
+  // Architecture only, per explicit product decision — no working TOTP
+  // verification flow is built this phase. The UI must render this as a
+  // visible "coming soon" state, never a toggle that silently no-ops.
+  twoFactorEnabled   Boolean   @default(false)
+  twoFactorSecret    String?
+  // Architecture only — no WebAuthn implementation this phase.
+  passkeysEnabled    Boolean   @default(false)
+  passwordSetAt      DateTime?
+  updatedAt          DateTime  @updatedAt
+
+  clientPortalUser ClientPortalUser @relation(fields: [clientPortalUserId], references: [id], onDelete: Cascade)
+}
+
+enum ScheduledJobRunStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+  RETRYING
+}
+
+// Registry of recurring background jobs, run by the Scheduler Service
+// (src/lib/scheduler/*). Provider-agnostic by design: today the only
+// concrete provider is node-cron (src/lib/scheduler/providers/node-cron-provider.ts),
+// running in-process. Business-logic job handlers (src/lib/scheduler/registry.ts)
+// never call node-cron directly — they implement JobDefinition.handler against
+// the SchedulerProvider interface, so swapping to BullMQ+Redis or Temporal later
+// only means writing a new provider, never touching a handler.
+model ScheduledJob {
+  id             String    @id @default(cuid())
+  key            String    @unique // stable handler key, e.g. "daily-board-meeting"
+  name           String
+  cronExpression String
+  enabled        Boolean   @default(true)
+  lastRunAt      DateTime?
+  nextRunAt      DateTime?
+  // BullMQ job priority (1 highest – 5 lowest), mirrored from JobDefinition.priority
+  // so the Job Management Dashboard can display it without importing registry.ts.
+  priority       Int?
+
+  runs ScheduledJobRun[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ScheduledJobRun {
+  id         String                @id @default(cuid())
+  jobId      String
+  status     ScheduledJobRunStatus @default(RUNNING)
+  startedAt  DateTime              @default(now())
+  finishedAt DateTime?
+  attempt    Int                   @default(1)
+  error      String?               @db.Text
+  // Freeform structured log lines the handler emits, e.g.
+  // [{ at, level, message, organizationId? }] — shown verbatim in the Job
+  // Management Dashboard's log viewer, never summarized/fabricated.
+  logs       Json?
+
+  job ScheduledJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, startedAt])
+  @@index([status])
+}
+
+enum IntegrationProviderKey {
+  // Email
+  GOOGLE_GMAIL
+  MICROSOFT_OUTLOOK
+  SENDGRID
+  MAILGUN
+  AMAZON_SES
+  // Calendar
+  GOOGLE_CALENDAR
+  MICROSOFT_CALENDAR
+  CAL_COM
+  CALENDLY
+  // Signature
+  DOCUSIGN
+  ADOBE_SIGN
+  DROPBOX_SIGN
+  // CRM (external sync targets — distinct from this app's own CRM)
+  HUBSPOT
+  SALESFORCE
+  ZOHO_CRM
+  PIPEDRIVE
+  FRESHSALES
+  // Communication
+  SLACK
+  MICROSOFT_TEAMS
+  DISCORD
+  TELEGRAM
+  TWILIO
+  // Storage
+  GOOGLE_DRIVE
+  DROPBOX
+  ONEDRIVE
+  AWS_S3
+  CLOUDFLARE_R2
+  // Payments
+  STRIPE
+  RAZORPAY
+  PAYPAL
+  PADDLE
+  LEMONSQUEEZY
+  // Accounting
+  QUICKBOOKS
+  XERO
+  ZOHO_BOOKS
+  // Meetings
+  ZOOM
+  GOOGLE_MEET
+  // Development
+  GITHUB
+  GITLAB
+  BITBUCKET
+  VERCEL
+  NETLIFY
+  CLOUDFLARE
+  // AI providers (routing, not OAuth — token stored the same way for consistency)
+  OPENAI
+  GOOGLE_GEMINI
+  DEEPSEEK
+  GROQ
+  OPENROUTER
+  OLLAMA
+  // Embedding providers (Phase 17 RAG Engine) — same IntegrationConnection
+  // storage/health-check system as every other AI_PROVIDER row above, so
+  // connecting an embeddings provider is the identical Connect-dialog flow.
+  VOYAGE_AI
+  COHERE
+  JINA_EMBEDDINGS
+  BGE
+}
+
+enum IntegrationCategory {
+  EMAIL
+  CALENDAR
+  SIGNATURE
+  CRM_SYNC
+  COMMUNICATION
+  STORAGE
+  PAYMENTS
+  ACCOUNTING
+  MEETINGS
+  DEVELOPMENT
+  AI_PROVIDER
+}
+
+enum IntegrationStatus {
+  NOT_CONNECTED
+  CONNECTED
+  ERROR
+  EXPIRED
+}
+
+// One connected third-party account per (organization, provider) — the
+// Integration Layer's persisted state (src/lib/integrations/*). Never
+// created/marked CONNECTED except after a real OAuth code exchange
+// succeeds; accessToken/refreshToken are AES-256-GCM ciphertext (see
+// src/lib/integrations/crypto.ts, INTEGRATION_TOKEN_ENCRYPTION_KEY — a
+// separate key from AgentMemory's AGENT_MEMORY_ENCRYPTION_KEY so rotating
+// one never silently breaks the other). No credentials are ever stored in
+// plaintext.
+model IntegrationConnection {
+  id             String                 @id @default(cuid())
+  organizationId String
+  provider       IntegrationProviderKey
+  category       IntegrationCategory
+  status         IntegrationStatus      @default(NOT_CONNECTED)
+
+  // AES-256-GCM ciphertext (base64: iv + authTag + ciphertext). Null until a
+  // real token exchange has happened.
+  encryptedAccessToken  String?   @db.Text
+  encryptedRefreshToken String?   @db.Text
+  tokenExpiresAt        DateTime?
+  scopes                String[]
+
+  connectedByUserId String?
+  lastSyncAt        DateTime?
+  lastHealthCheckAt DateTime?
+  lastError         String?   @db.Text
+  // Provider-specific non-secret bits (e.g. DocuSign account/base URI,
+  // connected mailbox address) — never a secret, those live in the
+  // encrypted fields above.
+  metadata          Json?
+
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connectedByUser User?        @relation(fields: [connectedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, provider])
+  @@index([organizationId, status])
+}
+
+// Real versioned project files — distinct from the generic Document model
+// (which stays the flat, unversioned store for proposals/contracts/company-
+// level files). A ProjectFile is a logical file identity; every upload
+// (including the first) creates a new ProjectFileVersion, never overwrites
+// storage in place, so version history is real and browsable.
+model ProjectFile {
+  id               String  @id @default(cuid())
+  organizationId   String
+  projectId        String
+  name             String
+  folder           String?
+  // Gates whether the Client Portal's file list can show this row — never
+  // shown to a client by default, same convention as Document.visibleToClient.
+  visibleToClient  Boolean @default(false)
+  uploadedByUserId String?
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versions     ProjectFileVersion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([projectId])
+}
+
+model ProjectFileVersion {
+  id               String  @id @default(cuid())
+  projectFileId    String
+  versionNumber    Int
+  // Relative path under storage/project-files/ — same auth-gated streaming
+  // convention as Document.storageKey, never under public/.
+  storageKey       String
+  mimeType         String
+  sizeBytes        Int
+  changeNote       String?
+  uploadedByUserId String?
+
+  projectFile ProjectFile @relation(fields: [projectFileId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([projectFileId, versionNumber])
+  @@index([projectFileId])
+}
+
+enum ActionItemStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+// A dedicated, real model for meeting/decision-sourced action items —
+// previously only implicit via Recommendation/Task. Distinct from Task:
+// an ActionItem always traces back to the real meeting/decision that
+// created it (never fabricated), and Recommendation stays the AI's own
+// suggestion log (a different concept — a recommendation may never become
+// an action item at all).
+model ActionItem {
+  id                String           @id @default(cuid())
+  organizationId    String
+  projectId         String?
+  meetingId         String?
+  decisionId        String?
+  title             String
+  description       String?          @db.Text
+  assignedToUserId  String?
+  assignedToAgentId String?
+  dueDate           DateTime?
+  status            ActionItemStatus @default(OPEN)
+  // Set when an ActionItem is promoted into a real, trackable Task — never
+  // required, since not every action item needs the full Task workflow.
+  taskId            String?          @unique
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  meeting      Meeting?     @relation(fields: [meetingId], references: [id], onDelete: SetNull)
+  decision     Decision?    @relation(fields: [decisionId], references: [id], onDelete: SetNull)
+  task         Task?        @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([projectId])
+  @@index([meetingId])
+}
+
+enum BugSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum BugStatus {
+  OPEN
+  IN_PROGRESS
+  FIXED
+  VERIFIED
+  WONT_FIX
+}
+
+// A dedicated QA/bug-tracking model with real fields Task never had
+// (severity, reproduction steps, environment) — previously only implicit
+// via Task.type === "BUG" + labels. Optionally links to a real Task for
+// assignment/workflow, so a bug can still be worked the same way as any
+// other task once triaged, without losing its QA-specific detail.
+model BugReport {
+  id               String      @id @default(cuid())
+  organizationId   String
+  projectId        String
+  taskId           String?     @unique
+  title            String
+  description      String      @db.Text
+  severity         BugSeverity @default(MEDIUM)
+  reproSteps       String?     @db.Text
+  environment      String?
+  reportedByUserId String?
+  status           BugStatus   @default(OPEN)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task         Task?        @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([projectId])
+  @@index([status])
+}
+
+// ============================= Phase 15: BI / Analytics / Forecasting =============================
+
+enum AlertType {
+  REVENUE_DROP
+  REVENUE_SPIKE
+  PIPELINE_DECLINE
+  CLIENT_CHURN_RISK
+  DEAL_STALLED
+  BUDGET_OVERRUN
+  LATE_PAYMENT
+  PROJECT_DELAY
+  SECURITY_RISK
+}
+
+enum AlertStatus {
+  ACTIVE
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+// Deterministic, rule-evaluated alerts (src/lib/alerts/*) — every trigger
+// traces to a real Prisma aggregate crossing a documented threshold, never
+// an LLM guess. Alerts PRODUCE Notifications via the existing
+// notifyOrganizationOwners pipeline; they don't replace them — same
+// relationship ProjectRisk already has to DELIVERY_HEALTH_DROPPED.
+model Alert {
+  id                String      @id @default(cuid())
+  organizationId    String
+  type              AlertType
+  severity          RiskLevel
+  status            AlertStatus @default(ACTIVE)
+  title             String
+  message           String      @db.Text
+  // Polymorphic pointer (mirrors AuditLog.metadata's Json approach) — the
+  // related entity varies by AlertType (Deal, Client, Invoice, Project,
+  // Company), no dedicated FK per type.
+  relatedEntityType String?
+  relatedEntityId   String?
+  metricValue       Float?
+  thresholdValue    Float?
+  formula           String      @db.Text
+
+  triggeredAt          DateTime  @default(now())
+  acknowledgedAt       DateTime?
+  acknowledgedByUserId String?
+  resolvedAt           DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, type, relatedEntityId])
+  @@index([organizationId, status])
+}
+
+enum SubscriptionBillingCycle {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAUSED
+  CANCELLED
+  EXPIRED
+}
+
+// Customer-facing recurring revenue the org manually logs (e.g. a retainer
+// or SaaS-resale contract with a client) — NOT to be confused with
+// BillingAccount, which is GrowthOS's OWN subscription plan for this
+// organization. No Stripe/billing integration exists; every row here is
+// user-entered, same discipline as Deal.value.
+model Subscription {
+  id              String                   @id @default(cuid())
+  organizationId  String
+  companyId       String?
+  clientId        String?
+  name            String
+  amount          Float
+  currency        String?
+  billingCycle    SubscriptionBillingCycle @default(MONTHLY)
+  status          SubscriptionStatus       @default(ACTIVE)
+  startDate       DateTime
+  renewalDate     DateTime?
+  cancelledAt     DateTime?
+  notes           String?                  @db.Text
+  createdByUserId String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  company      Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  client       Client?      @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId, status])
+}
+
+enum ExpenseCategory {
+  MARKETING
+  SALES
+  OTHER
+}
+
+// Manually-logged spend, the smallest honest input CAC needs — no
+// accounting-system integration exists or is in scope. Same manual-entry
+// discipline as Subscription/Deal.
+model ExpenseEntry {
+  id              String          @id @default(cuid())
+  organizationId  String
+  category        ExpenseCategory
+  amount          Float
+  incurredOn      DateTime        @db.Date
+  description     String?
+  createdByUserId String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, incurredOn])
+}
+
+// ============================= Phase 16: Integration Hub & Workflow Automation Engine =============================
+
+enum WorkflowStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum WorkflowRunStatus {
+  QUEUED
+  RUNNING
+  SUCCESS
+  FAILED
+  CANCELLED
+}
+
+enum WorkflowNodeType {
+  TRIGGER
+  CONDITION
+  DELAY
+  LOOP
+  AI_ACTION
+  EMAIL
+  SMS
+  WEBHOOK
+  CRM
+  PROPOSAL
+  PROJECT
+  APPROVAL
+  DOCUMENT
+  NOTIFICATION
+  DATABASE
+  FUNCTION
+  CUSTOM_API
+}
+
+// The advanced, multi-step, branchable automation engine — a genuine
+// superset of the existing simple AutomationRule (one trigger, one action),
+// which stays exactly as-is for its existing callers. A Workflow can express
+// everything an AutomationRule can (its first two nodes are just
+// TRIGGER→one action node) plus branching/loops/delays/AI-authored plans.
+model Workflow {
+  id              String            @id @default(cuid())
+  organizationId  String
+  name            String
+  description     String?           @db.Text
+  status          WorkflowStatus    @default(DRAFT)
+  triggerType     AutomationTrigger
+  // Trigger-specific config, e.g. { cronExpression } for CRON, { webhookId }
+  // for WEBHOOK_RECEIVED — validated against a per-trigger-type Zod schema
+  // in application code, not enforced at the DB layer.
+  triggerConfig   Json?
+  isAIGenerated   Boolean           @default(false)
+  // The exact natural-language prompt that produced this workflow, if any —
+  // kept verbatim for audit/regeneration, never summarized/altered.
+  aiPrompt        String?           @db.Text
+  createdByUserId String?
+  runCount        Int               @default(0)
+  lastRunAt       DateTime?
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  steps        WorkflowStep[]
+  runs         WorkflowRun[]
+  webhooks     Webhook[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId, status])
+}
+
+model WorkflowStep {
+  id            String           @id @default(cuid())
+  workflowId    String
+  nodeType      WorkflowNodeType
+  name          String
+  // Node-specific configuration (e.g. EMAIL: {to, subject, template},
+  // CONDITION: {field, operator, value}, CUSTOM_API: {url, method, headers}).
+  config        Json
+  // Canvas position for the visual builder — {x, y}. Purely presentational,
+  // never read by the execution engine.
+  position      Json
+  // Ordered DAG via explicit next-step pointers rather than an implicit
+  // array index, since CONDITION nodes branch (see onTrueStepId/onFalseStepId).
+  nextStepId    String?          @unique
+  onTrueStepId  String?          @unique
+  onFalseStepId String?          @unique
+
+  workflow    Workflow      @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  nextStep    WorkflowStep? @relation("WorkflowStepNext", fields: [nextStepId], references: [id], onDelete: SetNull)
+  onTrueStep  WorkflowStep? @relation("WorkflowStepOnTrue", fields: [onTrueStepId], references: [id], onDelete: SetNull)
+  onFalseStep WorkflowStep? @relation("WorkflowStepOnFalse", fields: [onFalseStepId], references: [id], onDelete: SetNull)
+
+  incomingNext    WorkflowStep[] @relation("WorkflowStepNext")
+  incomingOnTrue  WorkflowStep[] @relation("WorkflowStepOnTrue")
+  incomingOnFalse WorkflowStep[] @relation("WorkflowStepOnFalse")
+
+  stepRuns WorkflowStepRun[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workflowId])
+}
+
+// Real execution record — created the moment a trigger genuinely fires
+// (never speculative), one per actual run.
+model WorkflowRun {
+  id             String            @id @default(cuid())
+  workflowId     String
+  organizationId String
+  status         WorkflowRunStatus @default(QUEUED)
+  // The real event payload that triggered this run (webhook body, entity
+  // snapshot, cron tick timestamp, manual-trigger user input) — verbatim.
+  triggerPayload Json?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  error          String?           @db.Text
+  // BullMQ job id for this run, once queue infra (Batch 12.2) is wired —
+  // null for runs executed before/without the queue.
+  queueJobId     String?
+
+  workflow Workflow          @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  stepRuns WorkflowStepRun[]
+
+  createdAt DateTime @default(now())
+
+  @@index([workflowId, status])
+  @@index([organizationId, createdAt])
+}
+
+model WorkflowStepRun {
+  id             String            @id @default(cuid())
+  workflowRunId  String
+  workflowStepId String
+  status         WorkflowRunStatus @default(QUEUED)
+  input          Json?
+  output         Json?
+  error          String?           @db.Text
+  attempt        Int               @default(1)
+  startedAt      DateTime?
+  finishedAt     DateTime?
+
+  workflowRun  WorkflowRun  @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+  workflowStep WorkflowStep @relation(fields: [workflowStepId], references: [id], onDelete: Cascade)
+
+  @@index([workflowRunId])
+}
+
+// Prebuilt starting points — a real, complete { steps, triggerType } shape
+// (the same shape a real Workflow+WorkflowStep set would have), never a
+// vague description-only placeholder. "Install" deep-copies this into a
+// real Workflow for the installing org.
+model AutomationTemplate {
+  id             String            @id @default(cuid())
+  // Unique so the prebuilt-template seed can upsert on name instead of
+  // duplicating rows every time it re-runs.
+  name           String            @unique
+  description    String            @db.Text
+  category       String
+  icon           String?
+  popular        Boolean           @default(false)
+  triggerType    AutomationTrigger
+  triggerConfig  Json?
+  // Array of { nodeType, name, config, position, order } — application code
+  // materializes this into real WorkflowStep rows on install, preserving
+  // branching via a local index rather than real IDs (which don't exist
+  // until installed).
+  stepsBlueprint Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Persisted mirror of the in-process event-bus (src/lib/realtime/event-bus.ts)
+// publishes — that bus stays purely in-memory/SSE-only (documented single-
+// instance limitation), this table is the durable, replayable, queryable
+// history layer the Event Bus spec asks for, written alongside every publish.
+model EventLog {
+  id             String    @id @default(cuid())
+  organizationId String
+  eventType      String
+  payload        Json
+  publishedAt    DateTime  @default(now())
+  replayedAt     DateTime?
+  replayCount    Int       @default(0)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, eventType, publishedAt])
+}
+
+enum SecretCategory {
+  API_KEY
+  OAUTH_SECRET
+  JWT_SECRET
+  SMTP_CREDENTIAL
+  DATABASE_CREDENTIAL
+  ENCRYPTION_KEY
+  OTHER
+}
+
+// The Secrets Manager's own store — distinct from IntegrationConnection's
+// OAuth tokens (which have their own dedicated encrypted fields) and from
+// ApiKey (this app's own issued keys, bcrypt-hashed not reversibly
+// encrypted since they're never displayed again after creation). This is
+// for arbitrary user-entered secrets a Workflow's CUSTOM_API/WEBHOOK nodes
+// need to reference (e.g. a third-party service's raw API key) — AES-256-GCM
+// encrypted at rest via src/lib/crypto/aes-gcm.ts, decrypted only inside a
+// Server Action / job worker, never sent to the client.
+model Secret {
+  id              String         @id @default(cuid())
+  organizationId  String
+  key             String
+  category        SecretCategory @default(OTHER)
+  encryptedValue  String         @db.Text
+  description     String?
+  createdByUserId String?
+  lastRotatedAt   DateTime?
+  lastUsedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, key])
+  @@index([organizationId])
+}
+
+// Real per-call usage tracking for both this app's own issued ApiKeys and
+// outbound calls to connected IntegrationConnections — powers the API
+// Manager's "Usage Statistics" and rate-limit displays honestly, never
+// estimated.
+model APIUsage {
+  id                      String   @id @default(cuid())
+  organizationId          String
+  apiKeyId                String?
+  integrationConnectionId String?
+  endpoint                String
+  method                  String
+  statusCode              Int
+  responseTimeMs          Int
+  createdAt               DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([apiKeyId])
+  @@index([integrationConnectionId])
+}
+
+enum WebhookDirection {
+  INCOMING
+  OUTGOING
+}
+
+// User-configured, dynamically-created webhooks tied to a Workflow — the
+// generic Webhook Engine's own model. Distinct from the hardcoded, code-level
+// receiver routes already built for DocuSign/Adobe Sign/Dropbox Sign/Resend
+// (src/app/api/webhooks/*/route.ts), which stay exactly as they are; those
+// are fixed integrations, this is a user-defined endpoint per Workflow.
+model Webhook {
+  id              String           @id @default(cuid())
+  organizationId  String
+  workflowId      String?
+  direction       WebhookDirection
+  // For INCOMING: the unique slug this org's endpoint is reachable at
+  // (/api/webhooks/custom/[slug]). For OUTGOING: the real target URL this
+  // Workflow's WEBHOOK node posts to.
+  slug            String?          @unique
+  targetUrl       String?
+  // AES-256-GCM encrypted HMAC signing secret (incoming: verifies the
+  // sender; outgoing: signs our own payload so the receiver can verify us).
+  encryptedSecret String?          @db.Text
+  active          Boolean          @default(true)
+  lastTriggeredAt DateTime?
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workflow     Workflow?         @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  deliveries   WebhookDelivery[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+}
+
+model WebhookDelivery {
+  id         String           @id @default(cuid())
+  webhookId  String
+  direction  WebhookDirection
+  payload    Json
+  statusCode Int?
+  success    Boolean          @default(false)
+  attempt    Int              @default(1)
+  error      String?          @db.Text
+
+  webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([webhookId, createdAt])
+}
+
+// ===== Final Phase: Enterprise Security, Monitoring, DR, Compliance =====
+
+enum SecurityEventType {
+  LOGIN_FAILED
+  LOGIN_SUCCESS_NEW_DEVICE
+  BRUTE_FORCE_DETECTED
+  RATE_LIMIT_EXCEEDED
+  SUSPICIOUS_IP
+  PASSWORD_CHANGED
+  TWO_FACTOR_ENABLED
+  TWO_FACTOR_DISABLED
+  SESSION_REVOKED
+  API_KEY_ABUSE
+  WEBHOOK_SIGNATURE_INVALID
+  PERMISSION_DENIED
+}
+
+enum SecurityEventSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+// Distinct from the generic AuditLog (which records real WHAT-HAPPENED
+// business actions, e.g. "integration.connected") — SecurityEvent is
+// specifically security-relevant signals with a real severity, meant to
+// feed both an admin-facing security feed and the alerting pipeline
+// (SystemAlert below). Never a duplicate of AuditLog; a single real event
+// (e.g. a password change) may reasonably produce rows in both, from two
+// different call sites with two different purposes.
+model SecurityEvent {
+  id             String                @id @default(cuid())
+  userId         String?
+  organizationId String?
+  type           SecurityEventType
+  severity       SecurityEventSeverity @default(INFO)
+  ipAddress      String?
+  userAgent      String?
+  detail         String?               @db.Text
+  metadata       Json?
+
+  // Hash chain — same scheme as AuditLog.previousHash/hash above (see
+  // src/lib/audit-chain-verify.ts): tamper-evident, not a DB-enforced
+  // append-only guarantee. See AuditLog's doc comment for the full caveat.
+  previousHash String?
+  hash         String?
+
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([type, createdAt])
+  @@index([severity, createdAt])
+}
+
+enum IncidentSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum IncidentStatus {
+  OPEN
+  INVESTIGATING
+  MONITORING
+  RESOLVED
+}
+
+// A real, platform-operator-facing incident record — created either
+// manually (an operator declares an incident) or automatically from a
+// CRITICAL SystemAlert (see below). Distinct from the org-scoped BugReport
+// model (a client/team-facing bug tracker for one project) — this is
+// platform-wide operational incident tracking.
+model Incident {
+  id          String           @id @default(cuid())
+  title       String
+  description String?          @db.Text
+  severity    IncidentSeverity
+  status      IncidentStatus   @default(OPEN)
+  startedAt   DateTime         @default(now())
+  resolvedAt  DateTime?
+  postmortem  String?          @db.Text
+
+  updates IncidentUpdate[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Real timeline entries for an Incident — never edited in place once
+// created (append-only), so the incident's real history is preserved
+// exactly as it happened for a postmortem, matching this app's existing
+// "immutable log" discipline elsewhere (AuditLog/SecurityEvent are also
+// create-only, never updated).
+model IncidentUpdate {
+  id         String         @id @default(cuid())
+  incidentId String
+  message    String         @db.Text
+  status     IncidentStatus
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([incidentId])
+}
+
+enum SystemComponent {
+  DATABASE
+  REDIS
+  AI_PROVIDER
+  EMBEDDING_PROVIDER
+  PAYMENT_GATEWAY
+  STORAGE
+  WORKFLOW_QUEUE
+  SCHEDULER_QUEUE
+  RAG_QUEUE
+  BILLING_QUEUE
+  EMAIL
+}
+
+enum HealthStatus {
+  HEALTHY
+  DEGRADED
+  DOWN
+}
+
+// Real periodic health-check snapshots (see src/lib/monitoring/health.ts) —
+// a genuine probe result per component, never a fabricated "all green."
+// The live /api/health endpoint always computes a real-time check itself;
+// this table is the historical record those checks accumulate into for
+// uptime trend charts on the Production Dashboard.
+model SystemHealthSnapshot {
+  id        String          @id @default(cuid())
+  component SystemComponent
+  status    HealthStatus
+  latencyMs Int?
+  detail    String?         @db.Text
+
+  createdAt DateTime @default(now())
+
+  @@index([component, createdAt])
+}
+
+enum SystemAlertType {
+  SERVER_DOWN
+  QUEUE_FAILURE
+  DATABASE_FAILURE
+  PAYMENT_FAILURE
+  AUTH_FAILURE
+  AI_PROVIDER_FAILURE
+  STORAGE_FAILURE
+  HIGH_CPU
+  HIGH_MEMORY
+  SECURITY_INCIDENT
+}
+
+enum SystemAlertSeverity {
+  WARNING
+  CRITICAL
+}
+
+enum SystemAlertStatus {
+  ACTIVE
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+// Infrastructure/operational alerting — deliberately named SystemAlert, not
+// "Alert" (that name is already the pre-existing org-scoped business-KPI
+// alert model, e.g. "this deal's health score dropped" — a completely
+// different concern from "the database is unreachable"). Real rows only,
+// created by real monitoring checks (src/lib/monitoring/*), never
+// synthetic demo data.
+model SystemAlert {
+  id             String              @id @default(cuid())
+  type           SystemAlertType
+  severity       SystemAlertSeverity
+  status         SystemAlertStatus   @default(ACTIVE)
+  title          String
+  message        String              @db.Text
+  metadata       Json?
+  acknowledgedAt DateTime?
+  resolvedAt     DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([status, severity])
+  @@index([type, createdAt])
+}
+
+enum DeploymentEnvironment {
+  DEVELOPMENT
+  STAGING
+  PRODUCTION
+}
+
+enum DeploymentStatus {
+  PENDING
+  IN_PROGRESS
+  SUCCEEDED
+  FAILED
+  ROLLED_BACK
+}
+
+// A real deployment record — written by the CI/CD pipeline (see
+// .github/workflows/) via a real Deployment API call, or manually. Never
+// fabricated: `commitSha`/`version` are the real git ref being deployed.
+model Deployment {
+  id               String                @id @default(cuid())
+  environment      DeploymentEnvironment
+  version          String
+  commitSha        String
+  status           DeploymentStatus      @default(PENDING)
+  deployedByUserId String?
+  startedAt        DateTime              @default(now())
+  finishedAt       DateTime?
+  rollbackOfId     String?
+  notes            String?               @db.Text
+
+  deployedByUser User?        @relation(fields: [deployedByUserId], references: [id], onDelete: SetNull)
+  rollbackOf     Deployment?  @relation("DeploymentRollback", fields: [rollbackOfId], references: [id], onDelete: SetNull)
+  rolledBackBy   Deployment[] @relation("DeploymentRollback")
+
+  @@index([environment, startedAt])
+}
+
+enum BackupType {
+  DATABASE
+  STORAGE
+  CONFIGURATION
+  SECRETS
+}
+
+enum BackupStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+// A real backup run record — see scripts/backup-database.sh /
+// src/lib/ops/backup.ts. `storageKey`/`sizeBytes` are only ever set once a
+// real backup artifact actually exists on disk; a FAILED row never claims
+// a storageKey.
+model Backup {
+  id          String       @id @default(cuid())
+  type        BackupType
+  status      BackupStatus @default(RUNNING)
+  storageKey  String?      @db.Text
+  sizeBytes   BigInt?
+  checksum    String?
+  startedAt   DateTime     @default(now())
+  completedAt DateTime?
+  error       String?      @db.Text
+
+  restores Restore[]
+
+  @@index([type, startedAt])
+}
+
+enum RestoreStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+// A real restore-test/restore-execution record — restore TESTING
+// (verifying a backup is actually restorable, per the spec's "Restore
+// Testing") uses the same model with `isTest: true` against a scratch
+// target, never production, so a restore test can never be confused with a
+// real disaster-recovery restore in this table's history.
+model Restore {
+  id          String        @id @default(cuid())
+  backupId    String
+  isTest      Boolean       @default(true)
+  status      RestoreStatus @default(RUNNING)
+  startedAt   DateTime      @default(now())
+  completedAt DateTime?
+  error       String?       @db.Text
+
+  backup Backup @relation(fields: [backupId], references: [id], onDelete: Cascade)
+
+  @@index([backupId])
+}
+
+enum ComplianceFramework {
+  SOC2
+  ISO27001
+  GDPR
+  CCPA
+  DPDP_INDIA
+  PCI_DSS
+  WCAG
+}
+
+enum ComplianceReportStatus {
+  READY
+  PARTIAL
+  NOT_READY
+}
+
+// A real, generated readiness snapshot per framework — `findings` is real,
+// structured Json (a checklist of real controls checked against this
+// codebase's actual architecture), never a fabricated "certified" claim.
+// This app is not SOC2/ISO27001-CERTIFIED by generating this row — it
+// records ARCHITECTURAL READINESS for that certification process, which
+// still requires a real third-party auditor engagement this codebase
+// cannot itself provide.
+model ComplianceReport {
+  id          String                 @id @default(cuid())
+  framework   ComplianceFramework
+  status      ComplianceReportStatus
+  findings    Json
+  generatedAt DateTime               @default(now())
+
+  @@index([framework, generatedAt])
+}

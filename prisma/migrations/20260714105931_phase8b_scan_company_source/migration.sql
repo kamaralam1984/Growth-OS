@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "CompanySource" ADD VALUE 'WEBSITE_SCANNER';

@@ -1,0 +1,219 @@
+name: Deploy
+
+# Parameterized single workflow (staging vs. production is an input, not two
+# near-duplicate files) — manually triggered only. This repo has no actual
+# hosting target configured (no Vercel/AWS/etc. credentials or project IDs
+# exist in this environment), so this is an honest, runnable SKELETON: it
+# checks out, installs, generates the Prisma client, builds, and runs
+# migrations against the target environment's real database — then stops
+# at the actual deploy step with an explicit comment rather than faking a
+# successful deployment.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      commit_sha:
+        description: "Commit SHA being deployed (defaults to the triggering ref)"
+        required: false
+        type: string
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+# packages: write is required to push images to GHCR (ghcr.io) using this
+# workflow's own built-in GITHUB_TOKEN — no external registry credential is
+# needed for this part, unlike the actual host deploy step further down.
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-deploy:
+    name: Build & deploy (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha || github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      # Real Deployment row, created before anything else in this job can
+      # fail — see src/lib/ops/deployment.ts / scripts/record-deployment.ts.
+      # deploymentId is captured into $GITHUB_OUTPUT so the succeeded/failed
+      # steps below can update this exact row rather than guessing.
+      - name: Record deployment start (Deployment model)
+        id: record_start
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -e
+          OUTPUT=$(npx tsx scripts/record-deployment.ts start "${{ inputs.environment }}" "${{ inputs.commit_sha || github.sha }}" "sha-$(echo "${{ inputs.commit_sha || github.sha }}" | cut -c1-12)")
+          echo "$OUTPUT"
+          echo "$OUTPUT" | grep '^deploymentId=' >> "$GITHUB_OUTPUT"
+
+      # Real, targeted-environment migration — requires this GitHub
+      # Environment (`staging`/`production`) to define its own real
+      # DATABASE_URL secret. Deliberately NOT run against a throwaway
+      # service container like ci.yml — this touches the real environment
+      # database.
+      - name: Apply migrations to ${{ inputs.environment }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: npx prisma migrate deploy
+
+      - name: Build
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+          NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${{ secrets.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY }}
+        run: npm run build
+
+      # ---------------------------------------------------------------
+      # Real, generically-useful deploy artifact: build the existing
+      # ./Dockerfile and push it to GitHub Container Registry, tagged with
+      # both the git SHA and `latest`. This needs no host-specific
+      # credential — GHCR auth uses this workflow's own built-in
+      # GITHUB_TOKEN. Any real host (Vercel/AWS/Fly/etc.) can pull this
+      # exact image once it exists.
+      # ---------------------------------------------------------------
+      - name: Compute image tags
+        id: image
+        run: |
+          REPO_LOWER=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          SHA="${{ inputs.commit_sha || github.sha }}"
+          echo "repo=$REPO_LOWER" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=$REPO_LOWER:sha-$(echo "$SHA" | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=$REPO_LOWER:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image to GHCR
+        id: build_push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.image.outputs.sha_tag }}
+            ${{ steps.image.outputs.latest_tag }}
+
+      # ---------------------------------------------------------------
+      # >>> BOUNDARY: real infrastructure credentials become required here. <<<
+      # Everything above this line (build, migrate, GHCR build/push) is a
+      # genuine, runnable artifact with no external secret beyond this
+      # workflow's own GITHUB_TOKEN. Actually rolling the image just pushed
+      # (${{ steps.image.outputs.sha_tag }}) out to a live host — e.g.
+      # `vercel deploy --prebuilt --prod` with a real VERCEL_TOKEN, or
+      # updating an ECS service / Kubernetes Deployment to pull this image —
+      # requires host-specific credentials that do not exist in this
+      # environment. There is deliberately no fabricated "deploy succeeded"
+      # step below this comment.
+      # ---------------------------------------------------------------
+
+      - name: Record deployment succeeded (Deployment model)
+        if: success() && steps.record_start.outputs.deploymentId != ''
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          npx tsx scripts/record-deployment.ts succeeded "${{ steps.record_start.outputs.deploymentId }}" "Image published to ${{ steps.image.outputs.sha_tag }} (build-and-deploy job; host rollout not yet configured)."
+
+      - name: Record deployment failed (Deployment model)
+        if: failure() && steps.record_start.outputs.deploymentId != ''
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          npx tsx scripts/record-deployment.ts failed "${{ steps.record_start.outputs.deploymentId }}" "build-and-deploy job failed before/during GHCR build-push (see run logs for the failing step)."
+
+  rollback:
+    name: Rollback (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    # Manual-only safety valve — this job never runs as part of the normal
+    # deploy above. Trigger it as its own workflow_dispatch run with
+    # environment set to the target, after identifying the last-known-good
+    # Deployment row to roll back to.
+    if: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      # Real, runnable query: looks up the target Deployment row and the
+      # known-good Deployment it should roll back to (Deployment.rollbackOfId
+      # links the two — see prisma/schema.prisma's `model Deployment` and
+      # src/lib/ops/deployment.ts's planRollback). This step genuinely reads
+      # the database and prints a real rollbackToCommitSha — it is not a
+      # placeholder. What's still missing is everything after it: re-running
+      # build-and-deploy pinned to that commit/version against a real host,
+      # and then recording the rollback as a new Deployment row via
+      # recordRollbackStart. Both require the same real deployment target
+      # ("Configure your real deployment target here" comment above) that
+      # doesn't exist in this environment — a rollback is just a deploy of an
+      # older, already-verified build, not a distinct deploy mechanism, so it
+      # is blocked on exactly the same missing hosting credentials.
+      - name: Resolve rollback target (real Deployment query)
+        id: resolve_rollback
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          OUTPUT=$(npx tsx scripts/resolve-rollback-target.ts --environment "${{ inputs.environment }}")
+          echo "$OUTPUT"
+          echo "$OUTPUT" | grep '^rollbackToDeploymentId=' >> "$GITHUB_OUTPUT"
+          echo "$OUTPUT" | grep '^rollbackToCommitSha=' >> "$GITHUB_OUTPUT"
+
+      # ---------------------------------------------------------------
+      # >>> BOUNDARY: real infrastructure credentials become required here. <<<
+      # ${{ steps.resolve_rollback.outputs.rollbackToCommitSha }} is a real,
+      # already-verified commit resolved from the database above. Actually
+      # re-deploying it to a live host, then calling
+      # recordRollbackStart(rollbackTo, ...) to insert the new
+      # rollbackOfId-linked Deployment row, is the same real deploy mechanism
+      # gated on host credentials as build-and-deploy's own boundary comment
+      # — deliberately not faked here.
+      # ---------------------------------------------------------------
+
+      # ---------------------------------------------------------------
+      # Configure your real deployment target here (same as build-and-deploy
+      # above) — re-run it against the resolved rollback commit/version.
+      # ---------------------------------------------------------------
