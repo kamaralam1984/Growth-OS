@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { logAudit } from "@/lib/audit";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { checkPlanLimit, recordUsage } from "@/lib/billing/usage-metering";
@@ -41,10 +42,7 @@ export interface ActionResult {
 const EDITOR_ROLES = new Set(["OWNER", "ADMIN"]);
 
 async function requireEditableMembership(userId: string) {
-  const membership = await prisma.membership.findFirst({
-    where: { userId, status: "ACTIVE" },
-    orderBy: { createdAt: "asc" },
-  });
+  const membership = await resolveActiveMembership(userId);
   if (!membership) return { ok: false as const, error: "You don't belong to an organization yet." };
   if (!EDITOR_ROLES.has(membership.role)) {
     return { ok: false as const, error: "Only owners and admins can manage automation rules." };
@@ -544,10 +542,7 @@ export async function generateWorkflowPlanAction(prompt: string): Promise<Genera
     return { ok: false, error: "That description is too long — keep it under 2000 characters." };
   }
 
-  const membership = await prisma.membership.findFirst({
-    where: { userId, status: "ACTIVE" },
-    orderBy: { createdAt: "asc" },
-  });
+  const membership = await resolveActiveMembership(userId);
   if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
 
   if (!checkRateLimit(`workflow-ai-designer:${userId}`, { limit: 15, windowMs: 5 * 60_000 }).allowed) {

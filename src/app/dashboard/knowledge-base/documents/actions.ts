@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { logAudit } from "@/lib/audit";
 import { saveRagDocumentFile, deleteRagDocumentFile } from "@/lib/storage/rag-documents";
 import { enqueueDocumentIngestion } from "@/lib/rag/embedding-queue";
@@ -19,10 +20,7 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const LIST_PATH = "/dashboard/knowledge-base/documents";
 
 async function requireEditableMembership(userId: string) {
-  const membership = await prisma.membership.findFirst({
-    where: { userId, status: "ACTIVE" },
-    orderBy: { createdAt: "asc" },
-  });
+  const membership = await resolveActiveMembership(userId);
   if (!membership) return { ok: false as const, error: "You don't belong to an organization yet." };
   if (!EDITOR_ROLES.has(membership.role)) {
     return { ok: false as const, error: "Only owners and admins can manage ingested documents." };

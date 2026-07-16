@@ -30,6 +30,7 @@ import {
   type ToggleAgentActiveInput,
 } from "@/lib/validations/profile";
 import { createApiKeySchema } from "@/lib/validations/api-keys";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 
 export interface ActionResult {
   ok: boolean;
@@ -436,10 +437,7 @@ export async function createApiKey(name: string, scopes: string[] = [], rateLimi
   }
 
   try {
-    const membership = await prisma.membership.findFirst({
-      where: { userId, status: "ACTIVE" },
-      orderBy: { createdAt: "asc" },
-    });
+    const membership = await resolveActiveMembership(userId);
     if (!membership) {
       return { ok: false, error: "You do not have an active organization." };
     }

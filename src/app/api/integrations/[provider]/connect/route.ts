@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { auth } from "@/auth";
-import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { getAdapter } from "@/lib/integrations/registry";
 import { signState } from "@/lib/integrations/state";
 import type { IntegrationProviderKey } from "@/lib/integrations/types";
@@ -20,7 +20,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ prov
   const userId = session?.user?.id;
   if (!userId) return NextResponse.redirect(new URL("/login", request.url));
 
-  const membership = await prisma.membership.findFirst({ where: { userId, status: "ACTIVE" }, orderBy: { createdAt: "asc" } });
+  const membership = await resolveActiveMembership(userId);
   if (!membership || !PRIVILEGED_ROLES.has(membership.role)) {
     return NextResponse.redirect(new URL("/dashboard/settings/integrations?error=forbidden", request.url));
   }

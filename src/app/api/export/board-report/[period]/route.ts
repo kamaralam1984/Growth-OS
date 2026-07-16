@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { auth } from "@/auth";
-import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { getPeriodReport, getAgentProductivity } from "@/lib/reports";
 import { generateReport, REPORT_FORMAT_MIME, REPORT_FORMAT_EXTENSION } from "@/lib/reports/export-service";
 import { buildBoardReportBlueprint } from "@/app/board/reports/_lib/export-blueprint";
@@ -16,11 +16,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ peri
   const userId = session?.user?.id;
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const membership = await prisma.membership.findFirst({
-    where: { userId, status: "ACTIVE" },
-    orderBy: { createdAt: "asc" },
-    include: { organization: { select: { name: true, logo: true, gstNumber: true, registrationNumber: true } } },
-  });
+  const membership = await resolveActiveMembership(userId);
   if (!membership) return NextResponse.json({ error: "No organization" }, { status: 404 });
 
   const { period } = await params;

@@ -46,3 +46,29 @@ export async function requireActiveMembership(callbackPath: string): Promise<{
 
   return { userId, membership };
 }
+
+/**
+ * Same activeOrgId-cookie-aware resolution as requireActiveMembership,
+ * for API Route Handlers (which return a Response instead of redirecting).
+ * Returns null if the user has no ACTIVE membership. For a user in exactly
+ * one org this is identical to picking the oldest membership; the cookie
+ * only matters once a user belongs to 2+ orgs, so callers that don't
+ * `include` organization data can keep using a plain `findFirst` if they
+ * genuinely don't care which of the user's own orgs they operate on — but
+ * routes that scope a lookup by the result (e.g. "does this :id belong to
+ * membership.organizationId") should use this instead, so a multi-org user
+ * viewing Org B doesn't get a false "not found" for their own Org B data
+ * just because Org A happens to be older.
+ */
+export async function resolveActiveMembership(userId: string): Promise<ActiveMembership | null> {
+  const memberships = await prisma.membership.findMany({
+    where: { userId, status: "ACTIVE" },
+    orderBy: { createdAt: "asc" },
+    include: { organization: true },
+  });
+  if (memberships.length === 0) return null;
+
+  const cookieStore = await cookies();
+  const preferredOrgId = cookieStore.get(ACTIVE_ORG_COOKIE)?.value;
+  return memberships.find((m) => m.organizationId === preferredOrgId) ?? memberships[0];
+}

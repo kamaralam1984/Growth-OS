@@ -4,15 +4,12 @@ import { revalidatePath } from "next/cache";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { logAudit } from "@/lib/audit";
 
 export interface ActionResult {
   ok: boolean;
   error?: string;
-}
-
-async function resolveActiveMembership(userId: string) {
-  return prisma.membership.findFirst({ where: { userId, status: "ACTIVE" }, orderBy: { createdAt: "asc" } });
 }
 
 async function resolveAlertInOrg(userId: string, alertId: string) {

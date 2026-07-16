@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { logActivity } from "@/lib/activity";
 import { logAudit } from "@/lib/audit";
 import { checkRateLimit } from "@/lib/rate-limit";
@@ -50,7 +51,7 @@ async function requireProjectAccess(
   userId: string,
   requirePrivileged: boolean,
 ): Promise<{ ok: true; organizationId: string } | { ok: false; error: string }> {
-  const membership = await prisma.membership.findFirst({ where: { userId, status: "ACTIVE" }, orderBy: { createdAt: "asc" } });
+  const membership = await resolveActiveMembership(userId);
   if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
   const project = await prisma.project.findUnique({ where: { id: projectId }, select: { organizationId: true } });
   if (!project || project.organizationId !== membership.organizationId) return { ok: false, error: "Project not found." };

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { logAudit } from "@/lib/audit";
 import { logActivity } from "@/lib/activity";
 import { notifyUser } from "@/lib/notifications";
@@ -39,10 +40,7 @@ export async function createActionItem(input: CreateActionItemInput): Promise<Ac
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Please check the action item details." };
   }
 
-  const membership = await prisma.membership.findFirst({
-    where: { userId, status: "ACTIVE" },
-    orderBy: { createdAt: "asc" },
-  });
+  const membership = await resolveActiveMembership(userId);
   if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
   if (!ACTION_ITEM_MANAGER_ROLES.has(membership.role)) {
     return { ok: false, error: "Only owners and admins can create action items." };

@@ -2,6 +2,7 @@
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { AINotConnectedError, AIBillingError, isAIBillingError } from "@/lib/ai/client";
 import { retrieveContext, type RetrievedItem } from "@/lib/rag/retrieval";
@@ -22,10 +23,7 @@ async function requireMembership() {
   const userId = session?.user?.id;
   if (!userId) return { userId: null as never, organizationId: null, error: "You must be signed in." } as const;
 
-  const membership = await prisma.membership.findFirst({
-    where: { userId, status: "ACTIVE" },
-    orderBy: { createdAt: "asc" },
-  });
+  const membership = await resolveActiveMembership(userId);
   if (!membership) {
     return { userId, organizationId: null, error: "You don't belong to an organization yet." } as const;
   }

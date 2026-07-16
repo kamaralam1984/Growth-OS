@@ -5,17 +5,11 @@ import { revalidatePath } from "next/cache";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 
 export interface ActionResult {
   ok: boolean;
   error?: string;
-}
-
-async function resolveActiveMembership(userId: string) {
-  return prisma.membership.findFirst({
-    where: { userId, status: "ACTIVE" },
-    orderBy: { createdAt: "asc" },
-  });
 }
 
 export interface CreateWatchlistResult extends ActionResult {

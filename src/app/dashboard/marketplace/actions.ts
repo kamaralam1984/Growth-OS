@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { notifyOrganizationOwners } from "@/lib/notifications";
 
 export interface ActionResult {
@@ -17,10 +18,7 @@ export async function registerMarketplaceInterest(listingId: string): Promise<Ac
   const userId = session?.user?.id;
   if (!userId) return { ok: false, error: "You must be signed in." };
 
-  const membership = await prisma.membership.findFirst({
-    where: { userId, status: "ACTIVE" },
-    orderBy: { createdAt: "asc" },
-  });
+  const membership = await resolveActiveMembership(userId);
   if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
 
   try {

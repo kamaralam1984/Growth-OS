@@ -3,11 +3,11 @@
 import { revalidatePath } from "next/cache";
 
 import { auth } from "@/auth";
-import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
 import { scheduler } from "@/lib/scheduler/init";
 import { bullmqProvider, getQueueStats, retryFailedJob, discardFailedJob, type QueueStats } from "@/lib/scheduler/providers/bullmq-provider";
 import { updateJobCronExpressionSchema } from "@/lib/validations/scheduler";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 
 export interface ActionResult {
   ok: boolean;
@@ -20,7 +20,7 @@ async function requirePrivileged(): Promise<ActionResult & { organizationId?: st
   const session = await auth();
   const userId = session?.user?.id;
   if (!userId) return { ok: false, error: "You must be signed in." };
-  const membership = await prisma.membership.findFirst({ where: { userId, status: "ACTIVE" }, orderBy: { createdAt: "asc" } });
+  const membership = await resolveActiveMembership(userId);
   if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
   if (!PRIVILEGED_ROLES.has(membership.role)) return { ok: false, error: "Only owners and admins can manage background jobs." };
   return { ok: true, organizationId: membership.organizationId, userId };

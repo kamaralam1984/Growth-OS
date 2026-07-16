@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { auth } from "@/auth";
-import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { renderDocumentToPdf, renderDocumentToDocx, trackDocumentDownload } from "@/lib/documents";
 import { parseDocumentKindSlug, resolveDocumentById } from "@/app/dashboard/proposal/_lib/document-resolver";
 
@@ -16,7 +16,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ kind
   const userId = session?.user?.id;
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const membership = await prisma.membership.findFirst({ where: { userId, status: "ACTIVE" }, orderBy: { createdAt: "asc" } });
+  const membership = await resolveActiveMembership(userId);
   if (!membership) return NextResponse.json({ error: "No organization" }, { status: 404 });
 
   const { kind: kindSlug, id } = await params;

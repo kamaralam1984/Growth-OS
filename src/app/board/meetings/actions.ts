@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { logAudit } from "@/lib/audit";
 import { logActivity } from "@/lib/activity";
 import { notifyOrganizationOwners } from "@/lib/notifications";
@@ -39,10 +40,7 @@ export async function createMeeting(input: CreateMeetingInput): Promise<ActionRe
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Please check the meeting details." };
   }
 
-  const membership = await prisma.membership.findFirst({
-    where: { userId, status: "ACTIVE" },
-    orderBy: { createdAt: "asc" },
-  });
+  const membership = await resolveActiveMembership(userId);
   if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
   if (!PRIVILEGED_ROLES.has(membership.role)) {
     return { ok: false, error: "Only owners and admins can start a board meeting." };

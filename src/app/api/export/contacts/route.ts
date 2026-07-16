@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { withApiKeyAuth } from "@/lib/auth/with-api-key-auth";
 import { rowsToCsv, rowsToExcelBuffer, rowsToPdfBuffer, type ExportColumn } from "@/lib/export/crm-table";
 
@@ -98,11 +99,7 @@ export async function GET(request: Request) {
   const userId = session?.user?.id;
 
   if (userId) {
-    const membership = await prisma.membership.findFirst({
-      where: { userId, status: "ACTIVE" },
-      orderBy: { createdAt: "asc" },
-      include: { organization: { select: { name: true } } },
-    });
+    const membership = await resolveActiveMembership(userId);
     if (!membership) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     return exportContacts(request, membership.organizationId, membership.organization.name);
   }

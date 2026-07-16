@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { logActivity } from "@/lib/activity";
 import { logAudit } from "@/lib/audit";
 import { saveDocumentFile, deleteDocumentFile } from "@/lib/storage/documents";
@@ -14,13 +15,6 @@ export interface ActionResult {
 }
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
-
-async function resolveActiveMembership(userId: string) {
-  return prisma.membership.findFirst({
-    where: { userId, status: "ACTIVE" },
-    orderBy: { createdAt: "asc" },
-  });
-}
 
 /** Real local-disk file upload — accepts native FormData from a <form action={uploadDocument}>. */
 export async function uploadDocument(formData: FormData): Promise<ActionResult> {

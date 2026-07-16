@@ -9,6 +9,7 @@ import { setSecret, deleteSecret } from "@/lib/secrets/store";
 import { createOrRotateSecretSchema } from "@/lib/validations/secrets";
 import { canAccessResource } from "@/lib/security/abac";
 import type { MembershipRole } from "@/generated/prisma/client";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 
 export interface ActionResult {
   ok: boolean;
@@ -23,7 +24,7 @@ async function requirePrivileged(): Promise<
   const session = await auth();
   const userId = session?.user?.id;
   if (!userId) return { ok: false, error: "You must be signed in." };
-  const membership = await prisma.membership.findFirst({ where: { userId, status: "ACTIVE" }, orderBy: { createdAt: "asc" } });
+  const membership = await resolveActiveMembership(userId);
   if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
   if (!PRIVILEGED_ROLES.has(membership.role)) return { ok: false, error: "Only owners and admins can manage secrets." };
 

@@ -4,16 +4,13 @@ import { revalidatePath } from "next/cache";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { logAudit } from "@/lib/audit";
 import { detectProjectRisks } from "@/lib/projects/risk-detection";
 
 export interface ActionResult {
   ok: boolean;
   error?: string;
-}
-
-async function resolveActiveMembership(userId: string) {
-  return prisma.membership.findFirst({ where: { userId, status: "ACTIVE" }, orderBy: { createdAt: "asc" } });
 }
 
 async function resolveProjectInOrg(userId: string, projectId: string) {

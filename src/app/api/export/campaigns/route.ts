@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { campaignsToCsv, campaignsToExcelBuffer, type ExportCampaignRow } from "@/lib/export/outreach-export";
 import { outreachPerformanceReportToPdfBuffer } from "@/lib/export/outreach-pdf";
 import { getCampaignAnalytics } from "@/lib/outreach/campaign-analytics";
@@ -20,11 +21,7 @@ export async function GET(request: Request) {
   const userId = session?.user?.id;
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const membership = await prisma.membership.findFirst({
-    where: { userId, status: "ACTIVE" },
-    orderBy: { createdAt: "asc" },
-    include: { organization: { select: { name: true } } },
-  });
+  const membership = await resolveActiveMembership(userId);
   if (!membership) return NextResponse.json({ error: "No organization" }, { status: 404 });
 
   const url = new URL(request.url);

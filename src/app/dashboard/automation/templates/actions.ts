@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { logAudit } from "@/lib/audit";
 import { installTemplate } from "@/lib/workflows/templates";
 
@@ -21,7 +22,7 @@ export async function installTemplateAction(templateId: string): Promise<Install
   const userId = session?.user?.id;
   if (!userId) return { ok: false, error: "You must be signed in." };
 
-  const membership = await prisma.membership.findFirst({ where: { userId, status: "ACTIVE" }, orderBy: { createdAt: "asc" } });
+  const membership = await resolveActiveMembership(userId);
   if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
   if (!EDITOR_ROLES.has(membership.role)) return { ok: false, error: "Only owners and admins can install templates." };
 

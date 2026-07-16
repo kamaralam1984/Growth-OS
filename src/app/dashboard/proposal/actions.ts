@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { logActivity } from "@/lib/activity";
 import { logAudit } from "@/lib/audit";
 import { notifyOrganizationOwners } from "@/lib/notifications";
@@ -46,13 +47,6 @@ function describeAIError(error: unknown, prefix = "generating the proposal"): Ac
   }
   console.error(`[proposal] AI call failed (${prefix}):`, error);
   return { ok: false, errorKind: "generic", error: `Something went wrong ${prefix}. Please try again.` };
-}
-
-async function resolveActiveMembership(userId: string) {
-  return prisma.membership.findFirst({
-    where: { userId, status: "ACTIVE" },
-    orderBy: { createdAt: "asc" },
-  });
 }
 
 async function resolveProposalInOrg(userId: string, proposalId: string) {

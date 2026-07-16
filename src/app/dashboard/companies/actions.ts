@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { logActivity } from "@/lib/activity";
 import { logAudit } from "@/lib/audit";
 import { addCompanyTimelineEvent } from "@/lib/company-intelligence";
@@ -19,13 +20,6 @@ export interface ActionResult {
 }
 
 const EDITOR_ROLES = new Set(["OWNER", "ADMIN"]);
-
-async function resolveActiveMembership(userId: string) {
-  return prisma.membership.findFirst({
-    where: { userId, status: "ACTIVE" },
-    orderBy: { createdAt: "asc" },
-  });
-}
 
 /** Shared field mapping for both create and update — keeps the two in sync as the profile schema grows. */
 function buildProfileData(parsed: z.output<typeof companySchema>) {

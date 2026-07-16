@@ -107,15 +107,55 @@ async function extractImageText(buffer: Buffer, mimeType: string): Promise<strin
   return textBlock && textBlock.type === "text" ? textBlock.text : "";
 }
 
+// Zip-bomb guard: JSZip decompresses each entry fully into memory
+// (`file.async("nodebuffer")`) with no size limit of its own, so a single
+// small uploaded archive containing one maliciously-crafted highly-
+// compressed entry (or many entries) can exhaust server memory. Caps both
+// a single entry's declared uncompressed size and the running total across
+// the archive.
+const MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES = 100 * 1024 * 1024; // 100MB
+const MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES = 250 * 1024 * 1024; // 250MB
+
+/**
+ * JSZip's public API doesn't expose an entry's declared uncompressed size
+ * before decompressing it (index.d.ts documents `_data.uncompressedSize`
+ * but keeps it as an internal/private field) — reading it here is a
+ * best-effort pre-check, not load-bearing on its own: if it's ever
+ * unavailable (a future JSZip version), this just returns null and the
+ * running-total cap below (checked AFTER each real decompression) still
+ * bounds the archive as a whole, just one entry later than ideal.
+ */
+function declaredUncompressedSize(file: JSZip.JSZipObject): number | null {
+  const size = (file as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize;
+  return typeof size === "number" ? size : null;
+}
+
 async function extractZipArchive(buffer: Buffer): Promise<string> {
   const zip = await JSZip.loadAsync(buffer);
   const sections: string[] = [];
+  let totalUncompressedBytes = 0;
   for (const [name, file] of Object.entries(zip.files)) {
     if (file.dir) continue;
     const ext = extFromFilename(name);
     if (!["pdf", "docx", "xlsx", "pptx", "txt", "md", "csv", "html", "htm"].includes(ext)) continue;
+
+    const declaredSize = declaredUncompressedSize(file);
+    if (declaredSize !== null && declaredSize > MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES) {
+      console.error(`[rag/ingestion] skipping "${name}" from ZIP archive: declared uncompressed size ${declaredSize} exceeds the ${MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES}-byte per-entry cap.`);
+      continue;
+    }
+    if (totalUncompressedBytes > MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES) {
+      console.error(`[rag/ingestion] stopping ZIP archive extraction: cumulative uncompressed size exceeded the ${MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES}-byte archive cap.`);
+      break;
+    }
+
     try {
       const entryBuffer = Buffer.from(await file.async("nodebuffer"));
+      totalUncompressedBytes += entryBuffer.byteLength;
+      if (totalUncompressedBytes > MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES) {
+        console.error(`[rag/ingestion] discarding "${name}": extracting it pushed the archive's cumulative uncompressed size over the ${MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES}-byte cap.`);
+        break;
+      }
       const text = await extractDocumentText(entryBuffer, mimeTypeFromExtension(ext), name);
       if (text.trim()) sections.push(`# ${name}\n\n${text.trim()}`);
     } catch (error) {

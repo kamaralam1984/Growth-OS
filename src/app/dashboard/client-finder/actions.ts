@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { logActivity } from "@/lib/activity";
 import { logAudit } from "@/lib/audit";
 import { checkRateLimit } from "@/lib/rate-limit";
@@ -50,13 +51,6 @@ function describeAIError(error: unknown): ActionResult {
   }
   console.error("[client-finder] AI call failed:", error);
   return { ok: false, errorKind: "generic", error: "Something went wrong searching the web. Please try again." };
-}
-
-async function resolveActiveMembership(userId: string) {
-  return prisma.membership.findFirst({
-    where: { userId, status: "ACTIVE" },
-    orderBy: { createdAt: "asc" },
-  });
 }
 
 /** Runs a real, live web-search-backed ideal-client search via the org's Sales agent. */

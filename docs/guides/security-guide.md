@@ -1,6 +1,6 @@
 # KVL GrowthOS — Security Guide
 
-> A real inventory of this app's security posture, sourced from the actual files listed below. This document was written while the "Enterprise Security, Monitoring, DR, Compliance" phase was **actively landing in parallel** — `src/lib/security/` grew from 2 files to 4 (`abac.ts`, `incidents.ts`, `rate-limit-distributed.ts`, `security-events.ts`) over the course of writing this document. Re-verify this section against the final `src/lib/security/` contents before treating it as complete.
+> A real inventory of this app's security posture, sourced from the actual files listed below. Last reconciled against an adversarial 5-track security review (auth/sessions, RBAC/ABAC/IDOR, injection/XSS, secrets/crypto/webhooks, SSRF/uploads/OAuth) whose findings were fixed in commit `b3d2273` and after — see §8 for what was found/fixed and what honestly remains.
 
 ## 1. Network/transport-layer hardening — `src/proxy.ts`
 
@@ -18,10 +18,12 @@ Next.js 16 renamed `middleware.ts` to `proxy.ts` (the file's own header comment 
 
 - **Two-factor authentication (TOTP).** `User.twoFactorEnabled`/`twoFactorSecret` gate a second factor on the Credentials provider. If 2FA is enabled and no code (or an invalid one) is submitted, `authorize()` throws a typed `TwoFactorRequiredSignin`/`TwoFactorInvalidSignin` (both subclass `CredentialsSignin` with a distinct `.code`) so the login page can show a "enter your 6-digit code" field rather than a hard failure. Verification uses `otplib`'s `verify()` with `epochTolerance: 30`.
 - **Persistent account lockout**, independent from the rolling in-memory rate limiter: `User.failedLoginAttempts`/`lockedUntil` — after `MAX_FAILED_ATTEMPTS = 5` wrong passwords, the account locks for `LOCKOUT_MINUTES = 15`, durable across process restarts (unlike the in-memory limiter below).
-- **Rolling in-memory rate limiting** on sign-in attempts, keyed on `email+IP` (`checkRateLimit`, `src/lib/rate-limit.ts`) — 10 attempts / 10 minutes — so one bad actor can't lock out a real user's email from a different IP while still throttling a single source hammering many emails.
+- **Rolling in-memory rate limiting** on sign-in attempts, keyed on `email+IP` (`checkRateLimit`, `src/lib/rate-limit.ts`) — 10 attempts / 10 minutes — so one bad actor can't lock out a real user's email from a different IP while still throttling a single source hammering many emails. The "IP" half of that key is `clientIpFromHeaders()` (`src/lib/security/client-ip.ts`, one shared helper used everywhere an IP is read) — it trusts `X-Real-IP` (which nginx always overwrites to `$remote_addr` before forwarding, never client-controlled) rather than `X-Forwarded-For`'s first entry, which a client can freely prepend to and rotate on every request.
+- **The client-portal login** (`src/app/portal/_lib/actions.ts`, a separate credential system for `ClientPortalUser`) has the same two layers — a distributed rate limit and a persistent `failedLoginAttempts`/`lockedUntil` lockout on the `ClientPortalUser` row — not just the main app's `User` login.
 - **A second, distributed rate limiter** now exists at `src/lib/security/rate-limit-distributed.ts` (`checkDistributedRateLimit`) — a real Redis sorted-set sliding window, correct across multiple server instances (the existing in-memory limiter is explicitly documented as single-process-only, with 31 existing call sites left untouched). It fails **open** on a Redis outage — the same fail-open posture `src/lib/cache/redis-cache.ts` already takes for cache misses — because a rate limiter failing closed would turn a Redis outage into a full user-facing outage.
 - **Device fingerprinting / new-device & suspicious-login alerts.** `DeviceSession` rows are recorded on every sign-in (`src/lib/device-session.ts`, matched heuristically on `(userId, userAgent)`). A genuinely new device triggers a "new sign-in to your account" email (`sendNewDeviceAlert`); if that new device is **also** on a network prefix (`networkPrefix()` — a crude, documented-as-approximate IPv4 /16 comparison, not real geo-IP) never seen for this user in the last 30 days, a stronger "unusual sign-in activity" alert fires as well (`sendSuspiciousLoginAlert` + an in-app `CRITICAL_ALERT` notification + an `auth.suspicious_login_detected` `AuditLog` entry).
-- **"Logout everywhere."** Because sessions are stateless JWTs (`session: { strategy: "jwt" }`), `User.sessionInvalidatedAt` is checked on every `jwt()` callback invocation (which Auth.js re-runs on every session check, not just at sign-in) — any token minted before that timestamp is rejected, returning `null` and dropping the session.
+- **"Logout everywhere."** Because sessions are stateless JWTs (`session: { strategy: "jwt" }`), `User.sessionInvalidatedAt` is checked on every `jwt()` callback invocation (which Auth.js re-runs on every session check, not just at sign-in) — any token minted before that timestamp is rejected, returning `null` and dropping the session. A password reset via `/api/reset-password` now bumps this same timestamp (and clears `DeviceSession`/`Session` rows) — a reset terminates every other already-issued session, not just future sign-in attempts with the old password.
+- **Invalid TOTP codes count toward the same lockout as invalid passwords**, and **disabling 2FA requires re-entering the current password** — a correct password alone no longer gives unlimited 6-digit-code guesses, and a hijacked-but-not-yet-expired session can't silently strip the account's second factor.
 - **Real "remember me."** A custom `jwt.encode` override picks `maxAge` (1 day session-only vs. 30 days remembered) per-login based on the token's own `rememberMe` flag, since `@auth/core`'s default `encode()` always recomputes `exp` from the `maxAge` passed to it.
 - **Failed-login and brute-force events are logged**, not just enforced: every failed password check calls `logSecurityEvent()` with type `LOGIN_FAILED` (severity `WARNING`) or, once the attempt trips the lockout threshold, `BRUTE_FORCE_DETECTED` (severity `CRITICAL`).
 
@@ -32,7 +34,7 @@ Next.js 16 renamed `middleware.ts` to `proxy.ts` (the file's own header comment 
 - **Transparent upgrade on next successful login.** `needsRehash()`/`rehashIfNeeded()` implement the standard pattern: a bcrypt hash is only ever re-hashed to Argon2 immediately after this exact call already verified the plaintext password was correct — never speculatively.
 - API keys deliberately stay on **bcrypt**, not Argon2 — the code comment in this file explains why: bcrypt's cost factor defends against brute-forcing a low-entropy *human-chosen* secret, which a 256-bit random API key was never at risk from; switching would be pure churn.
 
-## 4. The four independent AES-256-GCM encryption key domains
+## 4. The five independent AES-256-GCM encryption key domains
 
 Confirmed by grepping `_ENCRYPTION_KEY` across `.env.example` and `src/`:
 
@@ -42,8 +44,9 @@ Confirmed by grepping `_ENCRYPTION_KEY` across `.env.example` and `src/`:
 | `INTEGRATION_TOKEN_ENCRYPTION_KEY` | `src/lib/integrations/crypto.ts` | `IntegrationConnection`'s OAuth access/refresh tokens and stored API-key credentials |
 | `SECRETS_MANAGER_ENCRYPTION_KEY` | `src/lib/secrets/crypto.ts` | The org-level Secrets Manager's `Secret.encryptedValue` (`/dashboard/settings/secrets`) |
 | `WEBHOOK_SECRET_ENCRYPTION_KEY` | `src/lib/workflows/webhooks.ts` | Automation Workflow outbound webhook signing secrets |
+| `TWO_FACTOR_SECRET_ENCRYPTION_KEY` | `src/lib/auth/two-factor-crypto.ts` | `User.twoFactorSecret` (previously stored in plaintext — a DB dump alone was enough to generate valid TOTP codes; fixed) |
 
-Every one of these four files independently throws a startup/runtime error if its own env var is missing or not a 64-character hex string (32 bytes) — e.g. `src/lib/integrations/crypto.ts`: *"`INTEGRATION_TOKEN_ENCRYPTION_KEY` must be set to a 64-character hex string (32 bytes) to store integration tokens."* Each key's own doc comment explicitly states the reason for the separation: rotating any one of the four must never break the other three. Generate each with `openssl rand -hex 32`. See `docs/guides/operations-manual.md` for the real rotation procedure per domain.
+Every one of these five files independently throws a startup/runtime error if its own env var is missing or not a 64-character hex string (32 bytes) — e.g. `src/lib/integrations/crypto.ts`: *"`INTEGRATION_TOKEN_ENCRYPTION_KEY` must be set to a 64-character hex string (32 bytes) to store integration tokens."* Each key's own doc comment explicitly states the reason for the separation: rotating any one must never break the others. Generate each with `openssl rand -hex 32`. See `docs/guides/operations-manual.md` for the real rotation procedure per domain.
 
 ## 5. Webhook signature verification per payment gateway (`src/lib/billing/gateway/*.ts`)
 
@@ -58,7 +61,16 @@ Every `PlatformGateway.verifyAndParseWebhook()` implementation verifies the raw 
 
 All four use Node's `crypto.timingSafeEqual` (not `===`) for the comparison — a real timing-attack mitigation, not just a functional check. The route handler (`src/app/api/webhooks/billing/[provider]/route.ts`) always reads the body as raw text first, never `request.json()`, since parsing first would break every one of these signature checks.
 
-The e-signature providers follow the same discipline, each with its own scheme (see `docs/api/api-reference.md` §"Webhooks" for specifics): DocuSign via `DOCUSIGN_WEBHOOK_HMAC_SECRET`, Adobe Sign via the `x-adobesign-clientid` header matched against `ADOBE_SIGN_CLIENT_ID`, Dropbox Sign via `DROPBOX_SIGN_CLIENT_SECRET` doubling as its own callback signing key. All three **do still process the payload with a logged warning if the relevant secret isn't set**, rather than rejecting it outright — a real, currently-accepted gap worth closing before those webhook endpoints are exposed on a production domain without their secrets configured. The Resend email webhook (`src/app/api/webhooks/resend/route.ts`) behaves the same way for `RESEND_WEBHOOK_SECRET` (Svix-based verification).
+The e-signature and email-delivery webhooks now fail **closed** (reject with a logged error) rather than processing unsigned payloads when their secret is unset — the same posture as the payment gateways above:
+
+| Provider | File | Verification method |
+|---|---|---|
+| DocuSign | `src/app/api/webhooks/docusign/route.ts` | HMAC-SHA256 (base64) over the raw body with `DOCUSIGN_WEBHOOK_HMAC_SECRET`, `x-docusign-signature-1` header, `timingSafeEqual` |
+| Adobe Sign | `src/app/api/webhooks/adobe-sign/route.ts` | `X-AdobeSign-ClientId` header matched against `ADOBE_SIGN_CLIENT_ID` — this **is** Adobe Acrobat Sign's real, documented verification mechanism (no separate HMAC option exists for this product); the route also implements the `GET` webhook-registration handshake Acrobat Sign requires (echoing the client ID back), which was previously missing entirely |
+| Dropbox Sign | `src/app/api/webhooks/dropbox-sign/route.ts` | HMAC-SHA256 of `event_time + event_type` keyed by `DROPBOX_SIGN_CLIENT_SECRET`, compared to `event.event_hash` via `timingSafeEqual` — an earlier version of this handler used a non-standard plain-hash scheme that would never have matched a real Dropbox Sign callback; now matches Dropbox's documented scheme |
+| Resend | `src/app/api/webhooks/resend/route.ts` | Svix-based verification (`svix-id`/`svix-timestamp`/`svix-signature`) with `RESEND_WEBHOOK_SECRET` |
+
+Configure the relevant secret before exposing any of these routes on a production domain — with it unset, the route now correctly rejects every request rather than accepting unauthenticated ones.
 
 ## 6. Security event logging & incident response (parallel task, landing during this writing)
 
@@ -70,9 +82,19 @@ The e-signature providers follow the same discipline, each with its own scheme (
 
 `AuditLog` (`prisma/schema.prisma`) is a separate, general-purpose "what happened" business-action log (distinct from the security-specific `SecurityEvent`), written via `logAudit()` (`src/lib/audit.ts`), indexed by `userId`, `organizationId`, and `action`. Real examples already firing today: `auth.suspicious_login_detected` (in `src/auth.ts`) and password-reset/email-verification completions (`src/app/api/reset-password/route.ts`, `.../verify-email/route.ts`).
 
-## 8. Honest gaps as of this writing
+## 8. SSRF protections for server-side outbound requests
 
-- The e-signature and Resend webhook routes accept unverified payloads (with a logged warning) when their signing secret isn't configured — tighten to hard-reject before exposing those routes without secrets set.
-- ABAC (`src/lib/security/abac.ts`) is applied at only a handful of call sites, not app-wide.
-- An `/admin/incidents` UI landed for `Incident` during this writing (see `docs/guides/admin-manual.md`); no admin UI for `ComplianceReport` was confirmed to exist yet at the time of this writing.
-- This entire `src/lib/security/` directory was still being actively written in parallel with this documentation pass — re-read it before relying on this document as final.
+Two independent code paths make outbound HTTP requests to URLs a user supplies, and both apply the same real hardening: scheme allowlist (http/https only), reject local/internal hostnames, DNS-resolve and reject private/loopback/link-local/CGNAT/reserved IP ranges (including `169.254.169.254`, the cloud-metadata endpoint) for both IPv4 and IPv6, and — critically — follow redirects **manually**, re-validating the destination host at every hop (a validated public host redirecting to an internal address is a common SSRF bypass otherwise):
+
+- `src/lib/scanner/safe-fetch.ts` — the Website Scanner.
+- `src/lib/workflows/node-executors/outgoing-request.ts` — Automation Workflow HTTP-request nodes and webhook-delivery retries. This one previously validated only the *initial* URL and then let `fetch`'s default `redirect: "follow"` chase redirects with no re-validation — a clean bypass, fixed to match `safe-fetch.ts`'s per-hop revalidation.
+
+Both files document the same honest residual limitation: DNS-rebinding TOCTOU (the validation resolves DNS once; the actual `fetch` call does its own, unpinned, separate resolution a moment later) is not fully closed by a DNS-allowlist approach without a custom low-level socket agent pinning the validated IP. Basic filtering is real and substantial; this specific gap is not.
+
+## 9. Honest gaps as of this writing
+
+- **DNS-rebinding TOCTOU** in both SSRF-protected paths above — see §8.
+- **ABAC** (`src/lib/security/abac.ts`) is applied at only a handful of call sites (secrets, company), not app-wide — the real protection for tenant isolation is the manual per-action organization check present and verified on every inspected Server Action/API route, not ABAC; if that manual pattern is ever forgotten in a future action, ABAC provides no automatic backstop today.
+- **Multi-org "active workspace" resolution** — a number of Server Actions/API routes resolved "the current organization" via the user's oldest ACTIVE membership rather than honoring the `activeOrgId` cookie the workspace switcher sets. This is a correctness/data-integrity bug for users in 2+ organizations (their own data in a non-oldest org can be missed or double-guessed as "not found"), never a cross-tenant security issue — Prisma queries stay scoped by whichever organizationId is resolved. `src/app/dashboard/_lib/require-membership.ts`'s `resolveActiveMembership()` is the shared, cookie-aware fix; being rolled out across remaining call sites.
+- **RAG prompt construction** (`src/lib/rag/generation.ts`) puts retrieved document content (which can itself be attacker-authored, via Knowledge Base uploads) into the same system-prompt channel as the grounding instructions, with no delimiter fencing. The never-fabricate/citation design limits blast radius, but this is worth revisiting as prompt-injection defenses mature — informational, not a "must-fix."
+- No admin UI for `ComplianceReport` beyond the `/admin/compliance` self-check page itself (see `src/lib/security/compliance.ts` and the Compliance section of the Production Readiness Report for what that page actually verifies vs. what remains a manual/organizational control).

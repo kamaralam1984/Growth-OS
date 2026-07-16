@@ -13,14 +13,11 @@ import { addCompanyToCrm, assignCompanyOwner, markCompanyPriority } from "@/app/
 import { addCompanyTimelineEvent } from "@/lib/company-intelligence";
 import { scoreCompany } from "@/lib/lead-scoring";
 import type { WebsiteScan, Technology } from "@/generated/prisma/client";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 
 export interface ActionResult {
   ok: boolean;
   error?: string;
-}
-
-async function resolveActiveMembership(userId: string) {
-  return prisma.membership.findFirst({ where: { userId, status: "ACTIVE" }, orderBy: { createdAt: "asc" } });
 }
 
 async function resolveScanInOrg(userId: string, scanId: string) {

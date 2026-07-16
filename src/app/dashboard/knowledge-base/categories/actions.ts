@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { resolveActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { logAudit } from "@/lib/audit";
 import { slugify } from "@/lib/slug";
 import type { KnowledgeCategory } from "@/generated/prisma/client";
@@ -18,7 +19,7 @@ export interface ActionResult {
 const LIST_PATH = "/dashboard/knowledge-base/categories";
 
 async function requirePrivilegedMembership(userId: string) {
-  const membership = await prisma.membership.findFirst({ where: { userId, status: "ACTIVE" }, orderBy: { createdAt: "asc" } });
+  const membership = await resolveActiveMembership(userId);
   if (!membership) return { ok: false as const, error: "You don't belong to an organization yet." };
   if (!isPrivilegedRole(membership.role)) {
     return { ok: false as const, error: "Only owners and admins can manage categories." };

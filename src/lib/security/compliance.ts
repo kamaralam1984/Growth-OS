@@ -84,18 +84,19 @@ async function checkEncryptionAtRest(): Promise<ControlFinding> {
     "INTEGRATION_TOKEN_ENCRYPTION_KEY",
     "SECRETS_MANAGER_ENCRYPTION_KEY",
     "WEBHOOK_SECRET_ENCRYPTION_KEY",
+    "TWO_FACTOR_SECRET_ENCRYPTION_KEY",
   ] as const;
   const missing = requiredVars.filter((name) => {
     const value = process.env[name];
     return !value || value.length !== 64;
   });
   return {
-    name: "Encryption at rest (4 independent AES-256-GCM key domains)",
+    name: `Encryption at rest (${requiredVars.length} independent AES-256-GCM key domains)`,
     verified: missing.length === 0,
     verificationMethod: "code",
     detail:
       missing.length === 0
-        ? `All 4 independent AES-256-GCM key domains are configured as real 64-char-hex keys: ${requiredVars.join(", ")}.`
+        ? `All ${requiredVars.length} independent AES-256-GCM key domains are configured as real 64-char-hex keys: ${requiredVars.join(", ")}.`
         : `Missing or malformed (must be 64-char hex) key(s): ${missing.join(", ")}.`,
   };
 }
