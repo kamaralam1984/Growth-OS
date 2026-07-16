@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { Check } from "lucide-react";
 
@@ -20,6 +21,8 @@ interface Tier {
   description: string;
   monthlyPrice: number | null;
   cta: string;
+  /** Omitted for tiers with no defined destination yet (e.g. Enterprise's "Talk to sales" — no contact route/email exists in this codebase yet); the button renders unwired rather than linking somewhere guessed. */
+  ctaHref?: string;
   ctaVariant: "default" | "outline" | "glass";
   featured?: boolean;
   features: string[];
@@ -31,6 +34,7 @@ const TIERS: Tier[] = [
     description: "For small teams testing AI-assisted outreach.",
     monthlyPrice: 149,
     cta: "Start free trial",
+    ctaHref: "/register",
     ctaVariant: "outline",
     features: [
       "Outreach AI agent (email + LinkedIn sequencing)",
@@ -46,6 +50,7 @@ const TIERS: Tier[] = [
     description: "The full AI workforce for teams scaling pipeline.",
     monthlyPrice: 399,
     cta: "Start free trial",
+    ctaHref: "/register",
     ctaVariant: "default",
     featured: true,
     features: [
@@ -176,9 +181,15 @@ function Pricing() {
                   ))}
                 </ul>
 
-                <Button variant={tier.ctaVariant} size="lg" className="w-full">
-                  {tier.cta}
-                </Button>
+                {tier.ctaHref ? (
+                  <Button variant={tier.ctaVariant} size="lg" className="w-full" asChild>
+                    <Link href={tier.ctaHref}>{tier.cta}</Link>
+                  </Button>
+                ) : (
+                  <Button variant={tier.ctaVariant} size="lg" className="w-full">
+                    {tier.cta}
+                  </Button>
+                )}
               </Card>
             </motion.div>
           ))}

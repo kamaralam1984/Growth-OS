@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { ArrowRight, PhoneCall } from "lucide-react";
 
@@ -48,9 +49,11 @@ function CTA() {
             variants={fadeInUp}
             className="flex flex-col items-center gap-4 sm:flex-row"
           >
-            <Button size="lg">
-              Start free trial
-              <ArrowRight />
+            <Button size="lg" asChild>
+              <Link href="/register">
+                Start free trial
+                <ArrowRight />
+              </Link>
             </Button>
             <Button size="lg" variant="outline">
               <PhoneCall />

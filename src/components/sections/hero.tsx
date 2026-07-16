@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { ArrowRight, Play, Sparkles } from "lucide-react";
 
@@ -122,9 +123,11 @@ function Hero() {
               className="flex flex-col items-center gap-4 sm:flex-row"
             >
               <MagneticButton>
-                <Button size="lg">
-                  Start free trial
-                  <ArrowRight />
+                <Button size="lg" asChild>
+                  <Link href="/register">
+                    Start free trial
+                    <ArrowRight />
+                  </Link>
                 </Button>
               </MagneticButton>
               <MagneticButton>

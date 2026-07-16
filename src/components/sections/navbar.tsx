@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useTheme } from "next-themes";
 import { AnimatePresence, motion } from "framer-motion";
 import { ChevronDown, Menu, Moon, Sun, X } from "lucide-react";
@@ -216,7 +217,9 @@ function Navbar() {
 
             <div className="hidden items-center gap-3 md:flex">
               <ThemeToggle />
-              <Button size="sm">Start free trial</Button>
+              <Button size="sm" asChild>
+                <Link href="/register">Start free trial</Link>
+              </Button>
             </div>
 
             <div className="flex items-center gap-2 md:hidden">
