@@ -101,6 +101,19 @@ async function checkEncryptionAtRest(): Promise<ControlFinding> {
   };
 }
 
+function checkFileStorageEncryption(): ControlFinding {
+  const key = process.env.FILE_STORAGE_ENCRYPTION_KEY;
+  const configured = !!key && key.length === 64;
+  return {
+    name: "Uploaded file encryption at rest",
+    verified: configured,
+    verificationMethod: "code",
+    detail: configured
+      ? "FILE_STORAGE_ENCRYPTION_KEY is set — every new save() through createFileStore() (src/lib/storage/file-store.ts) is AES-256-GCM encrypted on disk (documents, project files, RAG documents, knowledge-base attachments, white-label assets, platform invoices all share this factory)."
+      : "FILE_STORAGE_ENCRYPTION_KEY is not set — uploaded files are written to local disk storage/ as plaintext. Set this 64-char-hex key to enable at-rest encryption for all new uploads (existing plaintext files remain readable; see file-store.ts's magic-prefix versioning).",
+  };
+}
+
 function checkEncryptionInTransit(): ControlFinding {
   return {
     name: "Encryption in transit (TLS/HSTS)",
@@ -297,19 +310,51 @@ async function checkIncidentResponseProcess(): Promise<ControlFinding> {
   }
 }
 
+// Every automated retention/cleanup job actually registered in
+// src/lib/scheduler/registry.ts, keyed by that file's own `key` string so
+// this list can be verified with a real (if simple) source-file scan rather
+// than a hardcoded claim. Keep this in sync whenever a retention job is
+// added/removed/re-tuned there — see each job's own doc comment in
+// registry.ts for the full reasoning behind its window.
+const RETENTION_JOBS: Array<{ key: string; label: string }> = [
+  { key: "audit-log-retention-cleanup", label: "AuditLog rows older than 400 days" },
+  { key: "insight-retention-cleanup", label: "Insight rows older than 90 days" },
+  {
+    key: "security-event-retention-cleanup",
+    label:
+      "SecurityEvent rows older than 180 days, clamped so nothing created on/after the start of the oldest still-open Incident is ever deleted",
+  },
+  { key: "device-session-retention-cleanup", label: "DeviceSession rows inactive (lastActiveAt) for 180+ days" },
+  {
+    key: "restore-test-retention-cleanup",
+    label: "Restore rows from restore TESTS (isTest: true) older than 90 days — real production restores are never pruned",
+  },
+];
+
 async function checkDataRetentionPolicy(): Promise<ControlFinding> {
   const source = await readRepoFile("src/lib/scheduler/registry.ts");
-  const found = source !== null && source.includes("audit-log-retention-cleanup");
+  if (source === null) {
+    return {
+      name: "Automated data retention policy",
+      verified: false,
+      verificationMethod: "manual",
+      detail: "Could not read src/lib/scheduler/registry.ts from this deployment to verify live — treat as unverified, not as evidence of absence.",
+    };
+  }
+
+  const present = RETENTION_JOBS.filter((job) => source.includes(job.key));
+  const missing = RETENTION_JOBS.filter((job) => !source.includes(job.key));
+
   return {
     name: "Automated data retention policy",
-    verified: found,
-    verificationMethod: source === null ? "manual" : "code",
+    verified: present.length === RETENTION_JOBS.length,
+    verificationMethod: "code",
     detail:
-      source === null
-        ? "Could not read src/lib/scheduler/registry.ts from this deployment to verify live — treat as unverified, not as evidence of absence."
-        : found
-          ? 'A scheduled job ("audit-log-retention-cleanup", src/lib/scheduler/registry.ts) automatically prunes AuditLog rows older than 400 days. No equivalent automated retention/deletion job exists yet for other data categories (e.g. Backup rows) — those are retained indefinitely today.'
-          : "No automated retention-cleanup job found in the scheduler registry.",
+      `${present.length}/${RETENTION_JOBS.length} scheduled retention/cleanup job(s) found in src/lib/scheduler/registry.ts — ` +
+      present.map((job) => job.label).join("; ") +
+      "." +
+      (missing.length > 0 ? ` Missing: ${missing.map((job) => job.label).join("; ")}.` : "") +
+      " Backup metadata rows — and the real backup files they reference on disk — are intentionally NOT auto-pruned yet: an unattended job with a scoping bug could silently delete unrecoverable disaster-recovery backups, so that pruning is a deliberate, documented manual/future step rather than an oversight (see restoreTestRetentionCleanupJob's doc comment in registry.ts).",
   };
 }
 
@@ -491,14 +536,146 @@ function checkThirdPartyAuditRequirement(label: string): ControlFinding {
   };
 }
 
-function checkSubProcessorAgreements(): ControlFinding {
-  return {
-    name: "Sub-processor Data Processing Agreements (DPAs)",
-    verified: false,
-    verificationMethod: "manual",
-    detail:
-      "Requires a signed DPA with every sub-processor (hosting provider, email/SMS senders, AI/embedding providers, payment gateways) that may process personal data on this app's behalf. Legal/organizational control, not verifiable from application code.",
-  };
+async function checkVendorRegister(): Promise<ControlFinding> {
+  try {
+    const vendors = await prisma.vendorRecord.findMany({ where: { active: true }, select: { dpaSigned: true } });
+    if (vendors.length === 0) {
+      return {
+        name: "Vendor / sub-processor register & Data Processing Agreements (DPAs)",
+        verified: false,
+        verificationMethod: "code",
+        detail:
+          "The VendorRecord register (/admin/compliance/vendors) is reachable but has no active vendors logged yet. A signed DPA is required with every real sub-processor (hosting provider, email/SMS senders, AI/embedding providers, payment gateways) that may process personal data on this app's behalf.",
+      };
+    }
+    const missingDpa = vendors.filter((v) => !v.dpaSigned).length;
+    return {
+      name: "Vendor / sub-processor register & Data Processing Agreements (DPAs)",
+      verified: missingDpa === 0,
+      verificationMethod: "code",
+      detail:
+        missingDpa === 0
+          ? `${vendors.length} active vendor(s) tracked in the register (/admin/compliance/vendors), all with a DPA on file. dpaSigned is an admin attestation captured in a real queryable record — not a cryptographic proof the legal document exists.`
+          : `${vendors.length} active vendor(s) tracked; ${missingDpa} still missing a signed DPA. See /admin/compliance/vendors.`,
+    };
+  } catch (error) {
+    return {
+      name: "Vendor / sub-processor register & Data Processing Agreements (DPAs)",
+      verified: false,
+      verificationMethod: "code",
+      detail: `Live query failed: ${errorMessage(error)}`,
+    };
+  }
+}
+
+async function checkPolicyCenter(): Promise<ControlFinding> {
+  try {
+    const count = await prisma.securityPolicy.count({ where: { status: "PUBLISHED" } });
+    return {
+      name: "Information security policy center",
+      verified: count > 0,
+      verificationMethod: "code",
+      detail:
+        count > 0
+          ? `${count} published information security polic${count === 1 ? "y" : "ies"} tracked in the Policy Center (/admin/compliance/policies), each with real version history.`
+          : "The Policy Center (/admin/compliance/policies) has no published policy yet — draft and publish at least one real policy.",
+    };
+  } catch (error) {
+    return {
+      name: "Information security policy center",
+      verified: false,
+      verificationMethod: "code",
+      detail: `Live query failed: ${errorMessage(error)}`,
+    };
+  }
+}
+
+async function checkAssetInventory(): Promise<ControlFinding> {
+  try {
+    const count = await prisma.assetRecord.count();
+    return {
+      name: "Asset inventory",
+      verified: count > 0,
+      verificationMethod: "code",
+      detail:
+        count > 0
+          ? `${count} asset(s) tracked in the Asset Inventory (/admin/compliance/assets), each with an owner and a data classification.`
+          : "The Asset Inventory (/admin/compliance/assets) is reachable but empty — log at least one real asset.",
+    };
+  } catch (error) {
+    return {
+      name: "Asset inventory",
+      verified: false,
+      verificationMethod: "code",
+      detail: `Live query failed: ${errorMessage(error)}`,
+    };
+  }
+}
+
+async function checkStatementOfApplicability(): Promise<ControlFinding> {
+  try {
+    const count = await prisma.statementOfApplicabilityEntry.count();
+    return {
+      name: "Statement of Applicability",
+      verified: count > 0,
+      verificationMethod: "code",
+      detail:
+        count > 0
+          ? `${count} Annex A control scoping decision(s) recorded in the Statement of Applicability (/admin/compliance/soa).`
+          : "The Statement of Applicability (/admin/compliance/soa) is reachable but empty — no Annex A controls have been scoped yet.",
+    };
+  } catch (error) {
+    return {
+      name: "Statement of Applicability",
+      verified: false,
+      verificationMethod: "code",
+      detail: `Live query failed: ${errorMessage(error)}`,
+    };
+  }
+}
+
+async function checkChangeManagement(): Promise<ControlFinding> {
+  try {
+    const count = await prisma.changeRequest.count();
+    return {
+      name: "Change management process",
+      verified: count > 0,
+      verificationMethod: "code",
+      detail:
+        count > 0
+          ? `${count} change request(s) tracked through a real propose/approve/deploy trail (/admin/compliance/changes).`
+          : "The Change Management log (/admin/compliance/changes) is reachable but empty — no change request has been proposed yet.",
+    };
+  } catch (error) {
+    return {
+      name: "Change management process",
+      verified: false,
+      verificationMethod: "code",
+      detail: `Live query failed: ${errorMessage(error)}`,
+    };
+  }
+}
+
+async function checkRiskRegister(): Promise<ControlFinding> {
+  try {
+    const count = await prisma.securityRisk.count();
+    return {
+      name: "Security risk register",
+      verified: count > 0,
+      verificationMethod: "code",
+      detail:
+        count > 0
+          ? `${count} real risk(s) tracked in the platform's security risk register (/admin/compliance/risks) — likelihood × impact scored, never AI-guessed.`
+          : "The SecurityRisk table is reachable but empty — no risks have been logged yet. Add at least one real risk at /admin/compliance/risks.",
+    };
+  } catch (error) {
+    return {
+      name: "Security risk register",
+      verified: false,
+      verificationMethod: "code",
+      detail: `Live query failed: ${errorMessage(error)}`,
+    };
+  }
 }
 
 function checkBreachNotificationProcess(): ControlFinding {
@@ -518,6 +695,7 @@ async function controlsForFramework(framework: ComplianceFramework): Promise<Con
     case "SOC2":
       return Promise.all([
         checkEncryptionAtRest(),
+        Promise.resolve(checkFileStorageEncryption()),
         Promise.resolve(checkEncryptionInTransit()),
         checkPasswordHashing(),
         checkAuditAndSecurityLogging(),
@@ -528,11 +706,16 @@ async function controlsForFramework(framework: ComplianceFramework): Promise<Con
         checkIncidentResponseProcess(),
         checkRateLimiting(),
         checkDataRetentionPolicy(),
+        checkRiskRegister(),
+        checkPolicyCenter(),
+        checkVendorRegister(),
+        checkChangeManagement(),
         Promise.resolve(checkThirdPartyAuditRequirement("SOC2 Type II")),
       ]);
     case "ISO27001":
       return Promise.all([
         checkEncryptionAtRest(),
+        Promise.resolve(checkFileStorageEncryption()),
         Promise.resolve(checkEncryptionInTransit()),
         checkPasswordHashing(),
         checkAuditAndSecurityLogging(),
@@ -543,12 +726,17 @@ async function controlsForFramework(framework: ComplianceFramework): Promise<Con
         checkIncidentResponseProcess(),
         checkRateLimiting(),
         checkDataRetentionPolicy(),
+        checkRiskRegister(),
+        checkPolicyCenter(),
+        checkAssetInventory(),
+        checkStatementOfApplicability(),
         Promise.resolve(checkBreachNotificationProcess()),
         Promise.resolve(checkThirdPartyAuditRequirement("ISO/IEC 27001")),
       ]);
     case "GDPR":
       return Promise.all([
         checkEncryptionAtRest(),
+        Promise.resolve(checkFileStorageEncryption()),
         Promise.resolve(checkEncryptionInTransit()),
         checkAuditAndSecurityLogging(),
         Promise.resolve(checkRbac()),
@@ -557,7 +745,7 @@ async function controlsForFramework(framework: ComplianceFramework): Promise<Con
         checkRightToErasure(),
         checkCookieConsent(),
         checkDataRetentionPolicy(),
-        Promise.resolve(checkSubProcessorAgreements()),
+        checkVendorRegister(),
         Promise.resolve(checkBreachNotificationProcess()),
       ]);
     case "CCPA":
@@ -568,7 +756,7 @@ async function controlsForFramework(framework: ComplianceFramework): Promise<Con
         checkRightToErasure(),
         checkCookieConsent(),
         checkDataRetentionPolicy(),
-        Promise.resolve(checkSubProcessorAgreements()),
+        checkVendorRegister(),
       ]);
     case "DPDP_INDIA":
       return Promise.all([
@@ -581,7 +769,7 @@ async function controlsForFramework(framework: ComplianceFramework): Promise<Con
         checkCookieConsent(),
         checkDataRetentionPolicy(),
         Promise.resolve(checkBreachNotificationProcess()),
-        Promise.resolve(checkSubProcessorAgreements()),
+        checkVendorRegister(),
       ]);
     case "PCI_DSS":
       return Promise.all([

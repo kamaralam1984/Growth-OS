@@ -19,6 +19,7 @@ import {
 } from "@/lib/validations/discovery";
 import { addCompanyTimelineEvent } from "@/lib/company-intelligence";
 import { scoreCompany } from "@/lib/lead-scoring";
+import { findOrCreateCompany } from "@/lib/business-development/dedup";
 
 export interface ActionResult {
   ok: boolean;
@@ -32,6 +33,7 @@ export interface SearchClientsResult extends ActionResult {
 
 export interface SaveClientsResult extends ActionResult {
   savedCount?: number;
+  duplicatesSkipped?: number;
 }
 
 function describeAIError(error: unknown): ActionResult {
@@ -118,20 +120,27 @@ export async function saveDiscoveredClients(companies: DiscoveredCompany[]): Pro
 
   try {
     let savedCount = 0;
+    let duplicatesSkipped = 0;
     for (const item of parsed.data) {
-      const company = await prisma.company.create({
-        data: {
-          organizationId,
-          name: item.name,
-          website: item.website || null,
-          industry: item.industry || null,
-          email: item.email || null,
-          phone: item.phone || null,
-          notes: item.reason || null,
-          source: "CLIENT_FINDER",
-          status: "PROSPECT",
-        },
+      const { company, wasCreated } = await findOrCreateCompany({
+        organizationId,
+        name: item.name,
+        website: item.website,
+        industry: item.industry,
+        email: item.email,
+        notes: item.reason,
+        source: "CLIENT_FINDER",
+        status: "PROSPECT",
       });
+
+      if (!wasCreated) {
+        const existingClient = await prisma.client.findFirst({ where: { companyId: company.id } });
+        if (existingClient) {
+          duplicatesSkipped += 1;
+          continue; // already in the pipeline — never a duplicate Company or Client row
+        }
+      }
+
       await prisma.client.create({
         data: {
           organizationId,
@@ -156,16 +165,16 @@ export async function saveDiscoveredClients(companies: DiscoveredCompany[]): Pro
     await logActivity({
       organizationId,
       type: "SYSTEM_EVENT",
-      description: `${session.user?.name ?? "A team member"} saved ${savedCount} prospective client${savedCount === 1 ? "" : "s"} found by Client Finder.`,
+      description: `${session.user?.name ?? "A team member"} saved ${savedCount} prospective client${savedCount === 1 ? "" : "s"} found by Client Finder${duplicatesSkipped > 0 ? ` (${duplicatesSkipped} already existed)` : ""}.`,
       actorUserId: userId,
-      metadata: { count: savedCount },
+      metadata: { count: savedCount, duplicatesSkipped },
     });
-    await logAudit({ userId, organizationId, action: "client_finder.clients_saved", metadata: { count: savedCount } });
+    await logAudit({ userId, organizationId, action: "client_finder.clients_saved", metadata: { count: savedCount, duplicatesSkipped } });
 
     revalidatePath("/dashboard/client-finder");
     revalidatePath("/dashboard/companies");
     revalidatePath("/dashboard/crm");
-    return { ok: true, savedCount };
+    return { ok: true, savedCount, duplicatesSkipped };
   } catch (error) {
     console.error("[client-finder] saveDiscoveredClients failed:", error);
     return { ok: false, errorKind: "generic", error: "Something went wrong saving these clients. Please try again." };

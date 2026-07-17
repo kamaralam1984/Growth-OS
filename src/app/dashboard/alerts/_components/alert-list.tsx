@@ -2,7 +2,7 @@
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { BellOff, CheckCircle2 } from "lucide-react";
+import { BellOff, CheckCircle2, Lightbulb } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +20,7 @@ export interface AlertRow {
   metricValue: number | null;
   thresholdValue: number | null;
   formula: string;
+  mitigationSuggestions: string[];
   triggeredAt: string;
   acknowledgedAt: string | null;
   resolvedAt: string | null;
@@ -121,6 +122,19 @@ export function AlertList({ alerts }: { alerts: AlertRow[] }) {
                 {alert.resolvedAt ? ` · Resolved ${new Date(alert.resolvedAt).toLocaleString()}` : ""}
               </p>
             </div>
+
+            {alert.mitigationSuggestions.length > 0 && (
+              <div className="rounded-md border border-primary/20 bg-primary/5 p-3 text-xs">
+                <p className="flex items-center gap-1.5 font-medium text-primary">
+                  <Lightbulb className="size-3.5" /> AI-suggested next steps — grounded in this alert, not independent fact
+                </p>
+                <ul className="mt-1.5 list-inside list-disc text-muted-foreground">
+                  {alert.mitigationSuggestions.map((s, i) => (
+                    <li key={i}>{s}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </CardContent>
         </Card>
       ))}

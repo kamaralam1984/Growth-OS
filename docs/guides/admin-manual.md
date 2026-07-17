@@ -59,15 +59,24 @@ Once opened, an operator can:
 
 `IncidentUpdate` rows are append-only (never edited once created), matching this app's existing `AuditLog`/`SecurityEvent` "immutable log" discipline — the full real history of an incident is preserved exactly as it happened.
 
-## 6. Compliance tooling — not yet confirmed
+## 6. Compliance tooling — `/admin/compliance`
 
-`ComplianceReport` exists in `prisma/schema.prisma` (`framework`, `status`, `findings` (JSON), `generatedAt`), part of the same parallel security task's scope. As of this writing, **no admin UI for `ComplianceReport` had landed** (no `src/app/admin/compliance` or similar directory found). Check for it directly before telling an operator where to find compliance reports — if it hasn't landed, the only way to inspect `ComplianceReport` rows today is `npx prisma studio` or a direct query:
+Real, built (Phase 20). Shows the latest `ComplianceReport` per framework (SOC2, ISO27001, GDPR, CCPA, DPDP-India, PCI DSS, WCAG) with every control's verified/not-verified state, a "Regenerate" button (re-runs every live control check), and a link to the Security Risk Register at `/admin/compliance/risks`. See `docs/guides/compliance-guide.md` for the full real inventory.
 
-```ts
-await prisma.complianceReport.findMany({ orderBy: { generatedAt: "desc" } });
-```
+## 7. Global Launch Readiness — `/admin/launch`
 
-## 7. Summary table
+The single top-level readiness view (Phase 20). Displays 7 real scores (Global Readiness, Launch, Security, Compliance, Performance, Accessibility, Infrastructure Health), each computed from real persisted data or a live probe — a component with no data yet honestly shows "not measured," never a placeholder number. "Run checklist" executes a real, deterministic 20+ check pass (env vars, every infra component, providers, marketplace/automation seeding, monitoring, backups, accessibility, security risk register) and persists a `LaunchChecklistRun` snapshot.
+
+## 8. Other Phase 20 admin surfaces
+
+| Tool | Path | What it's for |
+|---|---|---|
+| Security Risk Register | `/admin/compliance/risks` | Real SOC2/ISO27001 risk register — add/track risks, deterministic likelihood×impact scoring |
+| Audit Log | `/admin/audit-log` | Cross-org, filterable view over the real hash-chained `AuditLog` table (action/org/user/date-range filters) |
+| Performance | `/admin/performance` | Real load-test results (k6 or the dependency-free `npm run test:load:local` harness) — p50/p95/p99, error rate, bottleneck flags per scenario |
+| Production Dashboard | `/admin/production` | Live infra health, backups/restore-tests (now genuinely nightly/weekly-scheduled), deployments, and a real Emergency Contacts roster (Business Continuity) |
+
+## 9. Summary table
 
 | Tool | Path | Gate | What it's for |
 |---|---|---|---|
@@ -75,6 +84,11 @@ await prisma.complianceReport.findMany({ orderBy: { generatedAt: "desc" } });
 | Partner Approvals | `/admin/partners` | `requirePlatformOwner` | Move a reseller Partner from PENDING to ACTIVE (or SUSPENDED) |
 | Partner Payouts | `/admin/payouts` | `requirePlatformOwner` | Confirm a partner payout was actually sent, mark PENDING → PAID |
 | Incident Management | `/admin/incidents` | `requirePlatformOwner` | View/create/update/resolve platform-wide Incidents; auto-opened from CRITICAL SecurityEvents |
-| Compliance reports | *(not yet built as of this writing)* | — | `ComplianceReport` model exists; check for an admin surface before assuming one exists |
+| Compliance reports | `/admin/compliance` | `requirePlatformOwner` | Per-framework readiness reports, real live control checks |
+| Global Launch Readiness | `/admin/launch` | `requirePlatformOwner` | The 7-score top-level readiness view; run the real launch checklist |
+| Security Risk Register | `/admin/compliance/risks` | `requirePlatformOwner` | SOC2/ISO27001 risk register |
+| Audit Log | `/admin/audit-log` | `requirePlatformOwner` | Cross-org filterable audit trail |
+| Performance | `/admin/performance` | `requirePlatformOwner` | Real load-test result history |
+| Production Dashboard | `/admin/production` | `requirePlatformOwner` | Live infra health, backups, deployments, emergency contacts |
 
 Granting `isPlatformOwner` (§1) is the only prerequisite for all of the above — there is no finer-grained platform-admin permission model today; any platform owner can reach every tool in this manual.

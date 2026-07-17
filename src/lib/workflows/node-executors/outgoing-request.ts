@@ -70,8 +70,14 @@ async function assertPublicHostname(hostname: string, fieldLabel: string): Promi
   if (isPrivateOrLocalHostname(hostname)) {
     throw new Error(`${fieldLabel} node's "url" targets a local/internal hostname ("${hostname}") — not allowed.`);
   }
-  if (net.isIP(hostname)) {
-    const isPrivate = net.isIPv4(hostname) ? isPrivateIpv4(hostname) : isPrivateIpv6(hostname);
+  // URL#hostname keeps the surrounding brackets for an IPv6 literal (e.g.
+  // "[::1]"), but net.isIP/net.isIPv4 only recognize the bare address —
+  // strip them here so a bracketed private IPv6 literal is actually caught
+  // below instead of silently falling through to a real (and misleading)
+  // DNS lookup of the literal "[::1]" string.
+  const bareHost = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+  if (net.isIP(bareHost)) {
+    const isPrivate = net.isIPv4(bareHost) ? isPrivateIpv4(bareHost) : isPrivateIpv6(bareHost);
     if (isPrivate) throw new Error(`${fieldLabel} node's "url" targets a private/internal IP address ("${hostname}") — not allowed.`);
     return;
   }

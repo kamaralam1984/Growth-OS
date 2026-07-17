@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { resetPasswordSchema } from "@/lib/validations/auth";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { checkRateLimitDegradable } from "@/lib/security/rate-limit-distributed";
 import { consumeUserToken } from "@/lib/auth/tokens";
 import { logAudit } from "@/lib/audit";
 import { logSecurityEvent } from "@/lib/security/security-events";
@@ -14,7 +14,7 @@ function clientIp(request: Request): string {
 }
 
 export async function POST(request: Request) {
-  const rate = checkRateLimit(`reset-password:${clientIp(request)}`, { limit: 10, windowMs: 15 * 60_000 });
+  const rate = await checkRateLimitDegradable(`reset-password:${clientIp(request)}`, { limit: 10, windowMs: 15 * 60_000 });
   if (!rate.allowed) {
     return NextResponse.json({ error: "Too many attempts. Please try again in a few minutes." }, { status: 429 });
   }

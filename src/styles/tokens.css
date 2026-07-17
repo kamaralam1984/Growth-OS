@@ -31,7 +31,7 @@
   --secondary-foreground: var(--color-neutral-50);
   --muted: var(--color-neutral-950);
   --muted-foreground: var(--color-neutral-400);
-  --accent: var(--color-purple-950);
+  --accent: var(--color-amber-950);
   --accent-foreground: var(--color-neutral-50);
   --destructive: var(--color-rose-500);
   --destructive-foreground: var(--color-neutral-975);
@@ -44,14 +44,14 @@
   --sidebar-foreground: var(--color-neutral-200);
   --sidebar-primary: var(--color-emerald-500);
   --sidebar-primary-foreground: var(--color-neutral-975);
-  --sidebar-accent: var(--color-purple-950);
+  --sidebar-accent: var(--color-amber-950);
   --sidebar-accent-foreground: var(--color-neutral-50);
   --sidebar-border: color-mix(in srgb, white 8%, transparent);
   --sidebar-ring: var(--color-emerald-500);
 
   --chart-1: var(--color-emerald-400);
   --chart-2: var(--color-blue-400);
-  --chart-3: var(--color-purple-400);
+  --chart-3: var(--color-amber-400);
   --chart-4: var(--color-neutral-300);
   --chart-5: var(--color-neutral-500);
 
@@ -86,8 +86,8 @@
   --secondary-foreground: var(--color-blue-800);
   --muted: var(--color-neutral-50);
   --muted-foreground: var(--color-neutral-600);
-  --accent: var(--color-purple-50);
-  --accent-foreground: var(--color-purple-800);
+  --accent: var(--color-amber-50);
+  --accent-foreground: var(--color-amber-800);
   --destructive: var(--color-rose-600);
   --destructive-foreground: var(--color-neutral-0);
 
@@ -99,14 +99,14 @@
   --sidebar-foreground: var(--color-neutral-700);
   --sidebar-primary: var(--color-emerald-600);
   --sidebar-primary-foreground: var(--color-neutral-0);
-  --sidebar-accent: var(--color-purple-50);
-  --sidebar-accent-foreground: var(--color-purple-800);
+  --sidebar-accent: var(--color-amber-50);
+  --sidebar-accent-foreground: var(--color-amber-800);
   --sidebar-border: color-mix(in srgb, black 8%, transparent);
   --sidebar-ring: var(--color-emerald-600);
 
   --chart-1: var(--color-emerald-600);
   --chart-2: var(--color-blue-600);
-  --chart-3: var(--color-purple-600);
+  --chart-3: var(--color-amber-600);
   --chart-4: var(--color-neutral-700);
   --chart-5: var(--color-neutral-500);
 
@@ -116,21 +116,29 @@
 }
 
 /* ================= Public marketing homepage accent override =================
-   Deep rose-red + gold, in place of the emerald used everywhere else in the
-   product. Scoped to `.theme-luxury` (wraps only src/app/page.tsx — see that
-   file) so it never touches the authenticated app: /dashboard, /board,
-   /portal all keep --primary as emerald, where green also carries real
-   "healthy / connected / success" status meaning a red accent would clash
-   with. Every existing component already themes off --primary/--ring
-   (Button, Badge, .bg-aurora, Spotlight, focus rings — see globals.css) so
-   overriding just these tokens re-colors the whole page for free.
+   Premium emerald-and-gold, in place of the flatter emerald used everywhere
+   else in the product — a richer "luxury" primary (gold) plus a green accent
+   layered on top, rather than a second flat color. Scoped to `.theme-luxury`
+   (wraps only src/app/page.tsx — see that file) so it never touches the
+   authenticated app: /dashboard, /board, /portal all keep --primary as plain
+   emerald, where green also carries real "healthy / connected / success"
+   status meaning a gold accent there would be a distraction, not a brand
+   statement. Every existing component already themes off --primary/--ring/
+   --accent (Button, Badge, .bg-aurora, .bg-mesh-gradient, Spotlight, focus
+   rings — see globals.css) so overriding just these tokens re-colors the
+   whole page for free, including every gradient/glow VFX utility.
+   Previously deep rose-red + gold; rose is now reserved solely for
+   --destructive (error/danger states) everywhere in the app, never used as a
+   brand color.
    Deliberately declared here, unlayered (same as the :root/data-theme
    blocks above), NOT inside globals.css's `@layer components` — Tailwind
    v4's cascade layers mean ANY layered rule loses to this file's unlayered
    :root regardless of selector specificity, so a `.theme-luxury` class
    living inside `@layer components` could never actually override --primary. */
 .theme-luxury {
-  --primary: var(--color-rose-500);
+  --primary: var(--color-amber-500);
   --primary-foreground: var(--color-neutral-975);
-  --ring: var(--color-rose-500);
+  --ring: var(--color-amber-500);
+  --accent: var(--color-emerald-950);
+  --accent-foreground: var(--color-emerald-100);
 }

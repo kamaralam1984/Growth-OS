@@ -15,6 +15,9 @@ import {
   pauseSubscription,
   resumeSubscription,
 } from "@/lib/billing/subscriptions";
+import { renderPlatformInvoicePdf } from "@/lib/billing/invoices";
+import { savePlatformInvoiceFile } from "@/lib/storage/platform-invoices";
+import { createSignedFileToken } from "@/lib/storage/signed-url";
 import type { PaymentGatewayProvider } from "@/generated/prisma/client";
 
 export interface ActionResult {
@@ -326,5 +329,72 @@ export async function requestManualPaymentAction(planId: string): Promise<Reques
   } catch (error) {
     console.error("[billing/subscription] requestManualPaymentAction failed:", error);
     return { ok: false, error: "Could not record the bank transfer request. Please try again." };
+  }
+}
+
+// A week is long enough to actually reach whoever needs the PDF (an
+// accounts-payable contact who doesn't have a GrowthOS login, e.g.) without
+// leaving a link usable indefinitely — matches the AGENTS.md/CLAUDE.md
+// "real, time-limited" requirement for signed URLs.
+const SHARE_LINK_EXPIRES_SECONDS = 7 * 24 * 60 * 60;
+
+export interface CreateInvoiceShareLinkResult extends ActionResult {
+  url?: string;
+}
+
+/**
+ * Real, time-limited signed download link (src/lib/storage/signed-url.ts)
+ * for a platform invoice PDF — lets an OWNER/ADMIN hand the invoice to
+ * whoever handles payment on their side without granting them a
+ * dashboard login. If the PDF hasn't been rendered to disk yet
+ * (pdfStorageKey unset — the download route at
+ * /api/platform-invoices/[id] renders on demand in that case), it's
+ * rendered and saved here first so the signed link points at a real file
+ * on disk rather than a storage key that doesn't exist yet.
+ */
+export async function createPlatformInvoiceShareLinkAction(invoiceId: string): Promise<CreateInvoiceShareLinkResult> {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) return { ok: false, error: "You must be signed in." };
+
+  const access = await requireEditableMembership(userId);
+  if (!access.ok) return access;
+  const organizationId = access.membership.organizationId;
+
+  const invoice = await prisma.platformInvoice.findUnique({ where: { id: invoiceId } });
+  if (!invoice || invoice.organizationId !== organizationId) {
+    return { ok: false, error: "Invoice not found." };
+  }
+
+  try {
+    let storageKey = invoice.pdfStorageKey;
+    if (!storageKey) {
+      const buffer = await renderPlatformInvoicePdf(invoice.id);
+      storageKey = await savePlatformInvoiceFile(organizationId, invoice.id, `${invoice.invoiceNumber}.pdf`, buffer);
+      await prisma.platformInvoice.update({ where: { id: invoice.id }, data: { pdfStorageKey: storageKey } });
+    }
+
+    const token = createSignedFileToken({
+      subdir: "platform-invoices",
+      storageKey,
+      filename: `${invoice.invoiceNumber}.pdf`,
+      contentType: "application/pdf",
+      expiresInSeconds: SHARE_LINK_EXPIRES_SECONDS,
+    });
+
+    await logAudit({
+      userId,
+      organizationId,
+      action: "billing.invoice.share_link_created",
+      metadata: { invoiceId: invoice.id },
+    });
+
+    return { ok: true, url: `${getAppBaseUrl()}/api/files/signed/${token}` };
+  } catch (error) {
+    console.error("[billing/subscription] createPlatformInvoiceShareLinkAction failed:", error);
+    const message = error instanceof Error && error.message.includes("FILE_SIGNED_URL_SECRET")
+      ? "Shareable links aren't configured on this server yet."
+      : "Could not create a shareable link. Please try again.";
+    return { ok: false, error: message };
   }
 }

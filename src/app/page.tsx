@@ -1,17 +1,16 @@
 import { Navbar } from "@/components/sections/navbar";
 import { Hero } from "@/components/sections/hero";
 import { AIAgents } from "@/components/sections/ai-agents";
-import { ProblemSolution } from "@/components/sections/problem-solution";
 import { Workflow } from "@/components/sections/workflow";
-import { Features } from "@/components/sections/features";
-import { SocialProof } from "@/components/sections/social-proof";
 import { RoiCalculator } from "@/components/sections/roi-calculator";
-import { Pricing } from "@/components/sections/pricing";
-import { Security } from "@/components/sections/security";
-import { FAQ } from "@/components/sections/faq";
 import { CTA } from "@/components/sections/cta";
 import { Footer } from "@/components/sections/footer";
 
+/**
+ * Testimonials, pricing, security, and FAQ moved to /product to keep this
+ * page a fast, light-on-text landing page — see src/app/product/page.tsx,
+ * linked from the navbar's "Product tour" item and the anchors below.
+ */
 export default function Home() {
   return (
     <div className="theme-luxury">
@@ -21,23 +20,9 @@ export default function Home() {
         <div id="ai-agents">
           <AIAgents />
         </div>
-        <ProblemSolution />
         <Workflow />
-        <Features />
-        <div id="social-proof">
-          <SocialProof />
-        </div>
         <div id="roi-calculator">
           <RoiCalculator />
-        </div>
-        <div id="pricing">
-          <Pricing />
-        </div>
-        <div id="security">
-          <Security />
-        </div>
-        <div id="faq">
-          <FAQ />
         </div>
         <div id="cta">
           <CTA />

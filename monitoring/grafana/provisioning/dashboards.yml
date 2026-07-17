@@ -1,0 +1,21 @@
+# Grafana dashboard provisioning (standard `apiVersion: 1` format —
+# https://grafana.com/docs/grafana/latest/administration/provisioning/#dashboards).
+#
+# Auto-loads every dashboard JSON file under the mounted `path` below on
+# Grafana startup (and re-syncs every `updateIntervalSeconds`). Mount
+# monitoring/grafana/dashboards (this repo) to the container path referenced
+# here — see docs/guides/operations-manual.md §2 for the exact volume
+# mounts.
+apiVersion: 1
+
+providers:
+  - name: "KVL GrowthOS"
+    orgId: 1
+    folder: "KVL GrowthOS"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards/kvl-growthos
+      foldersFromFilesStructure: false

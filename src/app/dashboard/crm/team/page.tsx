@@ -1,3 +1,6 @@
+import Link from "next/link";
+import { ShieldCheck } from "lucide-react";
+
 import { Container } from "@/components/ui/container";
 import { requireActiveMembership } from "../../_lib/require-membership";
 import { getTeamWorkspace } from "../_lib/team-actions";
@@ -12,13 +15,20 @@ export default async function CrmTeamPage() {
   return (
     <main className="py-8">
       <Container className="flex flex-col gap-6">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Team Workspace</h1>
-          <p className="text-sm text-muted-foreground">
-            Every active member, their role (Owner, Sales, Marketing, Support, Manager, Developer, Finance, or
-            AI Agent), and their real open-deal and open-task workload.
-            {!canManageRoles && " Only owners and admins can change roles."}
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">Team Workspace</h1>
+            <p className="text-sm text-muted-foreground">
+              Every active member, their role (Owner, Sales, Marketing, Support, Manager, Developer, Finance, or
+              AI Agent), and their real open-deal and open-task workload.
+              {!canManageRoles && " Only owners and admins can change roles."}
+            </p>
+          </div>
+          {canManageRoles && (
+            <Link href="/dashboard/crm/team/access-review" className="flex shrink-0 items-center gap-1.5 text-sm font-medium text-primary hover:underline">
+              <ShieldCheck className="size-4" /> Access Review
+            </Link>
+          )}
         </div>
 
         <div className="flex flex-col gap-2">

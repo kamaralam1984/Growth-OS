@@ -5,6 +5,7 @@ export interface InvoiceBlueprintInput {
   type: string;
   organizationName: string;
   logoUrl?: string | null;
+  footerText?: string | null;
   gstNumber?: string | null;
   registrationNumber?: string | null;
   companyName?: string | null;
@@ -70,7 +71,7 @@ export function buildInvoiceBlueprint(input: InvoiceBlueprintInput): DocumentBlu
       { label: "Grand Total", value: formatCurrencyValue(input.grandTotal, input.currency), emphasis: true },
       ...(input.amountPaid > 0 ? [{ label: "Amount Paid", value: formatCurrencyValue(input.amountPaid, input.currency) }, { label: "Balance Due", value: formatCurrencyValue(balanceDue, input.currency), emphasis: true }] : []),
     ],
-    footerText: input.organizationName,
+    footerText: input.footerText ?? input.organizationName,
     generatedAt: input.issueDate,
   };
 }

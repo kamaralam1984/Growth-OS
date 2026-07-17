@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
@@ -11,7 +11,8 @@ import { GlobalSearch } from "@/components/command-center/global-search";
 import { QuickActions } from "@/components/command-center/quick-actions";
 import { RealtimeRefresher } from "@/components/command-center/realtime-refresher";
 import { TranslationProvider } from "@/components/providers/translation-provider";
-import { getDictionary, isRtlLocale } from "@/lib/i18n";
+import { getDictionary, isRtlLocale, localeForOrganizationLanguage, localeFromAcceptLanguageHeader } from "@/lib/i18n";
+import { getEffectiveBranding } from "@/lib/white-label/resolve-brand";
 
 import { NotificationBell, type BoardNotification } from "@/app/board/_components/notification-bell";
 import { EmailVerificationBanner } from "./_components/email-verification-banner";
@@ -75,7 +76,20 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const activeMembership = memberships.find((m) => m.organizationId === preferredOrgId) ?? memberships[0];
   const organizationId = activeMembership.organizationId;
 
-  const [notifications, unreadCount, preference, aiStatus, liveMeeting, recentActivities, quickActionAgents, quickActionMemberships, quickActionCompanies, currentUser] =
+  const [
+    notifications,
+    unreadCount,
+    preference,
+    aiStatus,
+    liveMeeting,
+    recentActivities,
+    quickActionAgents,
+    quickActionMemberships,
+    quickActionCompanies,
+    quickActionClients,
+    currentUser,
+    branding,
+  ] =
     await Promise.all([
       prisma.notification.findMany({ where: { userId }, orderBy: { createdAt: "desc" }, take: 20 }),
       prisma.notification.count({ where: { userId, read: false } }),
@@ -99,7 +113,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
         orderBy: { createdAt: "asc" },
       }),
       prisma.company.findMany({ where: { organizationId }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
+      prisma.client.findMany({ where: { organizationId, status: "ACTIVE" }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
       prisma.user.findUnique({ where: { id: userId }, select: { emailVerified: true } }),
+      getEffectiveBranding(organizationId),
     ]);
 
   const boardNotifications: BoardNotification[] = notifications.map((n) => ({
@@ -121,7 +137,17 @@ export default async function DashboardLayout({ children }: { children: React.Re
     createdAt: a.createdAt,
   }));
 
-  const locale = preference?.locale ?? "en";
+  // Preference order: the user's own explicit choice, then their org's
+  // onboarding-time primary language (real fallback, not a guess — see
+  // localeForOrganizationLanguage), then the browser's real Accept-Language
+  // header (also a real signal, never a guess — see
+  // localeFromAcceptLanguageHeader), then English.
+  const acceptLanguage = (await headers()).get("accept-language");
+  const locale =
+    preference?.locale ??
+    localeForOrganizationLanguage(activeMembership.organization.primaryLanguage) ??
+    localeFromAcceptLanguageHeader(acceptLanguage) ??
+    "en";
   const dictionary = getDictionary(locale);
 
   return (
@@ -139,8 +165,15 @@ export default async function DashboardLayout({ children }: { children: React.Re
               href="/dashboard"
               className="flex items-center gap-2 text-lg font-semibold tracking-tight text-gradient-brand"
             >
-              <LogoMark size={22} />
-              KVL
+              {branding.logoUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element -- org-uploaded asset, not a static/optimizable local image
+                <img src={branding.logoUrl} alt={branding.brandName} className="h-[22px] w-auto" />
+              ) : (
+                <>
+                  <LogoMark size={22} />
+                  KVL
+                </>
+              )}
             </Link>
             <span className="hidden h-5 w-px bg-border sm:block" />
             <WorkspaceSwitcher organizations={organizations} activeOrgId={organizationId} />
@@ -153,7 +186,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
           <div className="flex shrink-0 items-center gap-2">
             <LiveMeetingBadge meeting={liveMeeting} />
             <AiStatusBadge status={aiStatus} />
-            <LocaleSelector initialLocale={preference?.locale ?? "en"} />
+            <LocaleSelector initialLocale={locale} />
             <ThemeToggle />
             <NotificationBell initialNotifications={boardNotifications} initialUnreadCount={unreadCount} />
             <ProfileMenu name={session.user?.name ?? null} email={session.user?.email ?? null} />
@@ -170,7 +203,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         <aside className="hidden w-60 shrink-0 border-r border-border lg:block">
           <DashboardSidebar />
         </aside>
-        <main className="min-w-0 flex-1 pb-16">{children}</main>
+        <main id="main-content" className="min-w-0 flex-1 pb-16">{children}</main>
       </div>
 
       <ActivityBar items={activityItems} />
@@ -178,6 +211,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         agents={quickActionAgents}
         users={quickActionMemberships.map((m) => m.user)}
         companies={quickActionCompanies}
+        clients={quickActionClients}
       />
     </div>
     </TranslationProvider>

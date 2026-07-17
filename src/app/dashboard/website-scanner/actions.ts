@@ -9,6 +9,7 @@ import { logActivity } from "@/lib/activity";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { startScanSchema, type StartScanInput } from "@/lib/validations/scanner";
 import { runWebsiteScan } from "@/lib/scanner/run-scan";
+import { researchKeywords } from "@/lib/seo/agent";
 import { addCompanyToCrm, assignCompanyOwner, markCompanyPriority } from "@/app/dashboard/companies/actions";
 import { addCompanyTimelineEvent } from "@/lib/company-intelligence";
 import { scoreCompany } from "@/lib/lead-scoring";
@@ -124,6 +125,45 @@ export async function startScan(input: StartScanInput): Promise<StartScanResult>
     aiReportError: result.aiReportError,
     error: result.ok ? undefined : "Could not scan that website — check the URL and try again.",
   };
+}
+
+export interface KeywordResearchResult extends ActionResult {
+  researchId?: string;
+}
+
+/** SEO Agent — real two-pass web-search keyword research, persisted to SeoKeywordResearch. */
+export async function researchSeoKeywords(topic: string): Promise<KeywordResearchResult> {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) return { ok: false, error: "You must be signed in." };
+
+  const trimmedTopic = topic.trim();
+  if (!trimmedTopic) return { ok: false, error: "Enter a topic or keyword seed to research." };
+  if (trimmedTopic.length > 200) return { ok: false, error: "Keep the topic under 200 characters." };
+
+  const membership = await resolveActiveMembership(userId);
+  if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
+
+  if (!checkRateLimit(`seo-keyword-research:${userId}`, { limit: 8, windowMs: 15 * 60_000 }).allowed) {
+    return { ok: false, error: "Too many keyword research runs — wait a few minutes and try again." };
+  }
+
+  try {
+    const research = await researchKeywords({ organizationId: membership.organizationId, topic: trimmedTopic });
+
+    await logAudit({
+      userId,
+      organizationId: membership.organizationId,
+      action: "seo_agent.keyword_research_run",
+      metadata: { researchId: research.id, topic: trimmedTopic },
+    });
+
+    revalidatePath("/dashboard/website-scanner");
+    return { ok: true, researchId: research.id };
+  } catch (error) {
+    console.error("[seo-agent] researchSeoKeywords failed:", error);
+    return { ok: false, error: "Something went wrong researching keywords. Please try again." };
+  }
 }
 
 export async function deleteScan(scanId: string): Promise<ActionResult> {

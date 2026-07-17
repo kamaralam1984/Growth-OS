@@ -5,6 +5,7 @@ export interface QuotationBlueprintInput {
   quotationNumber: string;
   organizationName: string;
   logoUrl?: string | null;
+  footerText?: string | null;
   gstNumber?: string | null;
   registrationNumber?: string | null;
   companyName?: string | null;
@@ -57,7 +58,7 @@ export function buildQuotationBlueprint(input: QuotationBlueprintInput): Documen
       ...(input.taxAmount > 0 ? [{ label: `Tax${input.taxPercent ? ` (${input.taxPercent}%)` : ""}`, value: formatCurrencyValue(input.taxAmount, input.currency) }] : []),
       { label: "Grand Total", value: formatCurrencyValue(input.grandTotal, input.currency), emphasis: true },
     ],
-    footerText: input.organizationName,
+    footerText: input.footerText ?? input.organizationName,
     generatedAt: input.createdAt,
   };
 }

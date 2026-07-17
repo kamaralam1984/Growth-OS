@@ -74,6 +74,7 @@ export const CORE_FEATURE_FLAGS: Array<{ key: string; name: string; description:
   { key: "api_access", name: "API Access", description: "Programmatic API keys and public API endpoints.", defaultEnabled: true },
   { key: "white_label", name: "White Label", description: "Custom branding, custom domains, white-labeled emails/PDFs.", defaultEnabled: false },
   { key: "sso", name: "Single Sign-On", description: "SSO login for organization members.", defaultEnabled: false },
+  { key: "marketplace", name: "Marketplace", description: "Browse and install AI Agents, Workflows, Industry Packs, and other Marketplace listings.", defaultEnabled: true },
 ];
 
 export async function ensureCoreFeatureFlagsSeeded(): Promise<void> {

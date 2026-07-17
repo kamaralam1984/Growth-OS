@@ -30,7 +30,7 @@ function LogoMark({ className, size = 28 }: LogoMarkProps) {
         <linearGradient id={lineGradient} x1="5" y1="26" x2="28" y2="8" gradientUnits="userSpaceOnUse">
           <stop offset="0%" stopColor="var(--color-emerald-400)" />
           <stop offset="55%" stopColor="var(--color-blue-400)" />
-          <stop offset="100%" stopColor="var(--color-purple-400)" />
+          <stop offset="100%" stopColor="var(--color-amber-400)" />
         </linearGradient>
         <linearGradient id={nodeGradient} x1="5" y1="26" x2="28" y2="8" gradientUnits="userSpaceOnUse">
           <stop offset="0%" stopColor="var(--color-emerald-400)" />

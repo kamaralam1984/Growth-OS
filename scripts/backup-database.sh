@@ -24,6 +24,17 @@ if ! command -v pg_dump >/dev/null 2>&1; then
   exit 1
 fi
 
+# Prisma's DATABASE_URL convention adds a "?schema=..." query parameter that
+# Prisma's own client understands but libpq/pg_dump does NOT (pg_dump
+# rejects it outright: 'invalid URI query parameter: "schema"'). Strip every
+# query parameter from the URI passed to pg_dump and instead select the
+# schema explicitly via pg_dump's own `-n` flag — the actually-correct way
+# to scope a dump to one schema, and robust to any other Prisma-only query
+# params (e.g. connection_limit) that would otherwise trip the same error.
+DB_URL_NO_QUERY="${DATABASE_URL%%\?*}"
+SCHEMA_PARAM="$(printf '%s' "$DATABASE_URL" | grep -oP '(?<=[?&]schema=)[^&]+' || true)"
+PG_SCHEMA="${SCHEMA_PARAM:-public}"
+
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKUP_ROOT="${BACKUP_DIR:-$PROJECT_ROOT/storage/backups}"
 TARGET_DIR="$BACKUP_ROOT/database"
@@ -33,8 +44,8 @@ TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 DUMP_FILE="$TARGET_DIR/kvl-growthos-db-${TIMESTAMP}.dump"
 GZ_FILE="${DUMP_FILE}.gz"
 
-echo "[backup-database] pg_dump (custom format) -> ${DUMP_FILE}" >&2
-if ! pg_dump "$DATABASE_URL" --format=custom --no-owner --no-privileges --file "$DUMP_FILE" >&2; then
+echo "[backup-database] pg_dump (custom format, schema=${PG_SCHEMA}) -> ${DUMP_FILE}" >&2
+if ! pg_dump "$DB_URL_NO_QUERY" --format=custom --no-owner --no-privileges --schema="$PG_SCHEMA" --file "$DUMP_FILE" >&2; then
   echo "[backup-database] pg_dump failed — removing partial dump file." >&2
   rm -f "$DUMP_FILE"
   exit 1

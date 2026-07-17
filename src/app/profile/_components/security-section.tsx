@@ -71,6 +71,22 @@ export function SecuritySection({
 
       <Card glass>
         <CardHeader>
+          <CardTitle>Company DNA</CardTitle>
+          <CardDescription>
+            What AI learned about your company from your website and LinkedIn — verified facts, AI inferences with
+            confidence scores, and an Executive Board strategy discussion. Nothing goes live until you review and
+            approve it.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Link href="/dashboard/settings/company-dna" className="text-sm font-medium text-primary hover:underline">
+            Open Company DNA →
+          </Link>
+        </CardContent>
+      </Card>
+
+      <Card glass>
+        <CardHeader>
           <CardTitle>Background jobs</CardTitle>
           <CardDescription>
             Owners and admins can review the Scheduler Service&apos;s recurring jobs — daily board meetings, health

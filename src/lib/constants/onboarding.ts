@@ -48,6 +48,7 @@ export const COMMON_LANGUAGES = [
   "Urdu",
   "Mandarin Chinese",
   "Japanese",
+  "Korean",
   "Russian",
   "Italian",
   "Dutch",

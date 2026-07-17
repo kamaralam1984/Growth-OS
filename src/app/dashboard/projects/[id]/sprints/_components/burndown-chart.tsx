@@ -27,10 +27,13 @@ export function BurndownChart({ points, totalTasks }: { points: BurndownPoint[];
   const maxY = Math.max(totalTasks, 1);
   const idealPath = buildPath(points.map((p) => p.idealRemaining), maxY);
   const actualPath = buildPath(points.map((p) => p.actualRemaining), maxY);
+  const actualValues = points.map((p) => p.actualRemaining).filter((v): v is number => v != null);
+  const currentRemaining = actualValues.length > 0 ? actualValues[actualValues.length - 1] : totalTasks;
+  const ariaLabel = `Sprint burndown chart: ${totalTasks} total task${totalTasks === 1 ? "" : "s"} over ${points.length} day${points.length === 1 ? "" : "s"}, ${currentRemaining} remaining as of today`;
 
   return (
     <div className="flex flex-col gap-2">
-      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="w-full" role="img" aria-label="Sprint burndown chart">
+      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="w-full" role="img" aria-label={ariaLabel}>
         <line x1={PADDING} y1={HEIGHT - PADDING} x2={WIDTH - PADDING} y2={HEIGHT - PADDING} stroke="currentColor" className="text-border" strokeWidth={1} />
         <line x1={PADDING} y1={PADDING} x2={PADDING} y2={HEIGHT - PADDING} stroke="currentColor" className="text-border" strokeWidth={1} />
         {idealPath && <path d={idealPath} fill="none" stroke="currentColor" className="text-muted-foreground" strokeWidth={2} strokeDasharray="4 4" />}

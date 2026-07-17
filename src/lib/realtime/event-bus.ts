@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
 
 export interface RealtimeEvent {
-  kind: "notification" | "activity" | "agent_status" | "comment";
+  kind: "notification" | "activity" | "agent_status" | "comment" | "company_discovery_progress";
   organizationId: string;
   /** Set on "comment" events so a project-scoped subscriber (e.g. the Client Portal SSE route) can filter the shared per-organization channel down to a single project's thread. */
   projectId?: string;

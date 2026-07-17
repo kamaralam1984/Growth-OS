@@ -1,0 +1,25 @@
+# Grafana datasource provisioning (standard `apiVersion: 1` format —
+# https://grafana.com/docs/grafana/latest/administration/provisioning/#datasources).
+#
+# Points at a Prometheus instance reachable at http://prometheus:9090. This
+# assumes a `prometheus` service on the same Docker network scraping this
+# app's real GET /api/metrics endpoint (src/app/api/metrics/route.ts). As of
+# this writing docker-compose.yml at the repo root defines only `app`,
+# `postgres`, and `redis` — there is NO `prometheus` (or `grafana`) service
+# in it, so `http://prometheus:9090` will not resolve unless you run your
+# own Prometheus container named `prometheus` on the same network, or change
+# this `url` to wherever your real Prometheus lives. See
+# docs/guides/operations-manual.md §2 for the honest setup story and a
+# `docker run` example that doesn't depend on docker-compose.yml at all.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: 30s

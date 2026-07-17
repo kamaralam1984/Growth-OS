@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { checkRateLimitDegradable } from "@/lib/security/rate-limit-distributed";
 import { getWebhookBySlug, decryptWebhookSecret, recordWebhookDelivery } from "@/lib/workflows/webhooks";
 import { verifySignature } from "@/lib/workflows/webhook-signature";
 import { startWorkflowRun } from "@/lib/workflows/engine";
@@ -33,7 +33,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
   let webhookId: string | null = null;
 
   try {
-    const rate = checkRateLimit(`webhook:custom:${slug}`, { limit: 60, windowMs: 60_000 });
+    const rate = await checkRateLimitDegradable(`webhook:custom:${slug}`, { limit: 60, windowMs: 60_000 });
     if (!rate.allowed) {
       return NextResponse.json({ error: "Rate limit exceeded." }, { status: 429 });
     }

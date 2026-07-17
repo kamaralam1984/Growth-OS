@@ -1,0 +1,30 @@
+# Real HTTPS ingress via cert-manager (automatic Let's Encrypt) — requires
+# an ingress-nginx controller and cert-manager already installed on the
+# cluster; neither is bundled here (cluster-level infra, out of this app's
+# own scope, same boundary docker-compose.yml draws around this host's
+# existing native nginx).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kvl-growthos
+  namespace: kvl-growthos
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - growthos.example.com
+      secretName: kvl-growthos-tls
+  rules:
+    - host: growthos.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kvl-growthos
+                port:
+                  number: 80

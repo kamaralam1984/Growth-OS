@@ -83,10 +83,10 @@ export function ScanCrmActions({ scanId, hasLead, ownerUserId, priority, hasExec
         </Button>
 
         <div className="flex flex-col gap-1.5">
-          <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          <label htmlFor="scan-owner-select" className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
             <UserCog className="size-3.5" /> Owner
           </label>
-          <Select value={ownerUserId ?? ""} onChange={(e) => handleAssignOwner(e.target.value)} disabled={assigningOwner} className="h-9 text-sm">
+          <Select id="scan-owner-select" value={ownerUserId ?? ""} onChange={(e) => handleAssignOwner(e.target.value)} disabled={assigningOwner} className="h-9 text-sm">
             <option value="">Unassigned</option>
             {members.map((m) => (
               <option key={m.id} value={m.id}>
@@ -97,10 +97,11 @@ export function ScanCrmActions({ scanId, hasLead, ownerUserId, priority, hasExec
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          {/* Not a form <label> — this heads a group of toggle buttons, not one single control. */}
+          <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
             <Flag className="size-3.5" /> Priority
-          </label>
-          <div className="flex flex-wrap gap-1.5">
+          </span>
+          <div role="group" aria-label="Priority" className="flex flex-wrap gap-1.5">
             {PRIORITY_OPTIONS.map((opt) => (
               <button key={opt} type="button" onClick={() => handleMarkPriority(opt)} disabled={markingPriority}>
                 <Badge variant={priority === opt ? PRIORITY_VARIANT[opt] : "outline"} className={priority === opt ? "" : "opacity-60"}>

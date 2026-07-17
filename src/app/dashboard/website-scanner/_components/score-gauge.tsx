@@ -39,7 +39,7 @@ export function ScoreGauge({ score, label, size = 200 }: ScoreGaugeProps) {
 
   return (
     <div className="flex flex-col items-center gap-1" style={{ width: size }}>
-      <svg viewBox="0 0 200 110" width={size} height={size * 0.55}>
+      <svg viewBox="0 0 200 110" width={size} height={size * 0.55} role="img" aria-label={`${label}: ${clamped} out of 100`}>
         <path d={arcPath(180, 360)} stroke="var(--color-muted)" strokeWidth={STROKE} fill="none" strokeLinecap="round" />
         <motion.path
           d={arcPath(180, 180 + sweep)}

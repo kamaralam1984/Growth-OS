@@ -23,6 +23,9 @@ export function CallsOverTimeChart({
   const max = Math.max(...values, 1);
   const min = Math.min(...values, 0);
   const range = max - min || 1;
+  const dataMin = Math.min(...values);
+  const dataMax = Math.max(...values);
+  const ariaLabel = `API calls line chart from ${points[0].label} to ${points[points.length - 1].label}, ranging from ${formatValue(dataMin)} to ${formatValue(dataMax)}`;
 
   const coords = points.map((p, i) => {
     const x = points.length === 1 ? width / 2 : padding + (i / (points.length - 1)) * (width - padding * 2);
@@ -35,7 +38,7 @@ export function CallsOverTimeChart({
 
   return (
     <div className="flex flex-col gap-1">
-      <svg viewBox={`0 0 ${width} ${height}`} className="h-auto w-full" preserveAspectRatio="none" role="img">
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-auto w-full" preserveAspectRatio="none" role="img" aria-label={ariaLabel}>
         <path d={areaPath} fill="var(--color-primary)" opacity={0.08} />
         <path d={path} fill="none" stroke="var(--color-primary)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
         {coords.map((c, i) => (

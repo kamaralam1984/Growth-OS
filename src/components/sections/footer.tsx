@@ -7,9 +7,9 @@ const LINK_GROUPS = [
   {
     heading: "Product",
     links: [
-      { label: "Features", href: "#features" },
-      { label: "How it works", href: "#how-it-works" },
-      { label: "Pricing", href: "#pricing" },
+      { label: "Features", href: "/product" },
+      { label: "How it works", href: "/#how-it-works" },
+      { label: "Pricing", href: "/product#pricing" },
       { label: "Integrations", href: "#" },
     ],
   },
@@ -20,6 +20,8 @@ const LINK_GROUPS = [
       { label: "Careers", href: "#" },
       { label: "Blog", href: "#" },
       { label: "Contact", href: "#" },
+      // Real, public, unauthenticated status page — see src/app/status/page.tsx.
+      { label: "System Status", href: "/status" },
     ],
   },
   {

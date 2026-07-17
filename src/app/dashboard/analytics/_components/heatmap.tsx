@@ -10,9 +10,11 @@ export function Heatmap({ grid }: { grid: number[][] }) {
   }
 
   const weeks = grid[0]?.length ?? 0;
+  const total = grid.flat().reduce((sum, v) => sum + v, 0);
+  const ariaLabel = `Heatmap of completed tasks across ${weeks} week${weeks === 1 ? "" : "s"}: ${total} task${total === 1 ? "" : "s"} completed in total, peak of ${max} in a single day`;
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-1.5" role="img" aria-label={ariaLabel}>
       <div className="grid gap-1" style={{ gridTemplateColumns: `28px repeat(${weeks}, 1fr)` }}>
         <span />
         {Array.from({ length: weeks }).map((_, w) => (

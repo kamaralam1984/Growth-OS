@@ -11,6 +11,11 @@ import {
   CreditCard,
   Landmark,
   Percent,
+  Store,
+  ScrollText,
+  Gauge,
+  Rocket,
+  FileText,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -37,6 +42,13 @@ interface AdminLinkGroup {
  */
 const GROUPS: AdminLinkGroup[] = [
   {
+    label: "Launch",
+    links: [
+      { href: "/admin/launch", label: "Global Readiness", icon: Rocket, exact: true },
+      { href: "/admin/documentation", label: "Documentation", icon: FileText, exact: true },
+    ],
+  },
+  {
     label: "Automation",
     links: [
       { href: "/admin/workflow", label: "Workflow", icon: Workflow, exact: true },
@@ -48,7 +60,9 @@ const GROUPS: AdminLinkGroup[] = [
     links: [
       { href: "/admin/production", label: "Production", icon: Server, exact: true },
       { href: "/admin/incidents", label: "Incidents", icon: AlertTriangle },
-      { href: "/admin/compliance", label: "Compliance", icon: ShieldCheck, exact: true },
+      { href: "/admin/compliance", label: "Compliance", icon: ShieldCheck },
+      { href: "/admin/audit-log", label: "Audit Log", icon: ScrollText, exact: true },
+      { href: "/admin/performance", label: "Performance", icon: Gauge, exact: true },
     ],
   },
   {
@@ -61,6 +75,16 @@ const GROUPS: AdminLinkGroup[] = [
   {
     label: "Partners",
     links: [{ href: "/admin/partners", label: "Partners", icon: Percent, exact: true }],
+  },
+  {
+    label: "Marketplace",
+    links: [
+      { href: "/admin/marketplace", label: "Overview", icon: Store, exact: true },
+      { href: "/admin/marketplace/listings", label: "Listings", icon: Wrench, exact: true },
+      { href: "/admin/marketplace/publishers", label: "Publishers", icon: Percent, exact: true },
+      { href: "/admin/marketplace/reviews", label: "Reviews", icon: ShieldCheck, exact: true },
+      { href: "/admin/marketplace/orders", label: "Orders", icon: CreditCard, exact: true },
+    ],
   },
 ];
 

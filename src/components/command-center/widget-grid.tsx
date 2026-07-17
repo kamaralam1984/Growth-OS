@@ -214,6 +214,7 @@ function WeatherWidget({
               onChange={(e) => setCity(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSave()}
               placeholder="City, e.g. Mumbai"
+              // eslint-disable-next-line jsx-a11y/no-autofocus -- this input only appears after clicking edit; focusing it isn't page-load focus-theft.
               autoFocus
               className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus:border-primary"
             />

@@ -7,6 +7,8 @@ below is a real command that exists in this repository today (see
 `src/lib/ops/backup.ts`, `src/lib/ops/restore-test.ts`). Nothing here
 describes tooling that doesn't exist yet.
 
+> **Phase 20 fix note:** the very first real end-to-end backup+restore-test run against this repo's actual `DATABASE_URL` (which, per Prisma convention, carries a `?schema=public` query parameter) surfaced two real bugs, both now fixed: (1) `pg_dump` rejects the `schema` query parameter outright (`invalid URI query parameter: "schema"`) — `scripts/backup-database.sh` now strips query parameters from the URI it passes to `pg_dump` and selects the schema via the real `-n` flag instead; (2) `pg_restore` failed with `schema "public" already exists` because a freshly `createdb`'d database already has a `public` schema, colliding with the dump's own `CREATE SCHEMA public;` — `src/lib/ops/restore-test.ts` now passes `--clean --if-exists` to `pg_restore`, the standard fix. Both are live-verified working as of this fix.
+
 ## 1. Targets — RTO / RPO (stated honestly, not aspirationally)
 
 **RPO (Recovery Point Objective) — currently manual/cron-triggered backups,
@@ -25,14 +27,7 @@ WHERE type = 'DATABASE' AND status = 'SUCCEEDED'
 ORDER BY "completedAt" DESC LIMIT 1;
 ```
 
-If `scripts/run-backup.ts database` is scheduled to run every 6 hours (a
-reasonable starting cadence — wire it into cron/a process manager; it is
-NOT currently auto-scheduled by `src/lib/scheduler/*`, which is an
-in-process BullMQ scheduler and not a good fit for a script that must
-survive the app process being down), the honest worst-case RPO is **up to 6
-hours of data loss**. Reduce this by increasing backup frequency, or (a real
-follow-up, not implemented here) enabling WAL archiving / a managed
-Postgres provider's point-in-time-recovery feature for a near-zero RPO.
+**Update (Phase 20):** `scripts/backup-database.sh` now runs automatically every night at 2am via the real `"nightly-database-backup"` job in `src/lib/scheduler/registry.ts` (BullMQ-backed, calling the same `runBackupScript()` logic the CLI wraps — see `src/lib/ops/run-backup-script.ts`), so the honest worst-case RPO is now **up to 24 hours of data loss** in normal operation, down from the prior manual/unscheduled state. The caveat that motivated keeping this OUT of the in-process scheduler originally still applies and is worth stating plainly: a BullMQ job only runs while the app process is up — if the app itself is down or crash-looping for an extended period, the nightly backup silently doesn't run either. For a stronger guarantee independent of app uptime, additionally wire `npm run backup:database` into host-level cron (or your platform's scheduled-task feature) as a second, process-independent trigger — `runBackupScript()`/`recordBackupStart()` are idempotent-safe to call more than once a day. Reduce RPO further by increasing frequency, or (a real follow-up, not implemented here) enabling WAL archiving / a managed Postgres provider's point-in-time-recovery feature for a near-zero RPO.
 
 **RTO (Recovery Time Objective) — realistic estimate for this
 architecture:**
@@ -73,17 +68,12 @@ Both scripts write into `$BACKUP_DIR` (defaults to
 history, or the Production Dashboard's Backups panel
 (`src/app/admin/production/page.tsx`).
 
-**Recommended cadence:** schedule both via host-level cron (or your
-platform's scheduled-task feature) — e.g.:
+**Real, current cadence (Phase 20):** both are now genuinely scheduled via `src/lib/scheduler/registry.ts` — `"nightly-database-backup"` (2am daily) and `"weekly-storage-backup"` (2:30am Sunday). No manual cron setup is required for the default cadence. For a stronger guarantee that survives the app process itself being down (the one real limitation of an in-process BullMQ scheduler), additionally wire host-level cron as a second, independent trigger:
 
 ```cron
 0 */6 * * * cd /path/to/kvl-growthos && npm run backup:database >> /var/log/kvl-backup-db.log 2>&1
 0 3 * * *   cd /path/to/kvl-growthos && npm run backup:storage  >> /var/log/kvl-backup-storage.log 2>&1
 ```
-
-This is deliberately NOT wired into `src/lib/scheduler/*` (the in-process
-BullMQ scheduler) — a backup must still run even if the app process itself
-is down or crash-looping, which an in-process scheduler cannot guarantee.
 
 ## 3. Restore procedure — REAL disaster recovery (production restore)
 
@@ -154,9 +144,7 @@ is honestly recorded as `FAILED` with that real error message — restore
 testing does not silently skip or fake success when this prerequisite is
 missing.
 
-**Recommended cadence:** run `npm run restore:test` on a schedule right
-after each `backup:database` run (e.g. chained in the same cron line) so a
-broken backup is caught within hours, not discovered during a real incident.
+**Real, current cadence (Phase 20):** the `"weekly-restore-test"` job (`src/lib/scheduler/registry.ts`, Sunday 3am — one hour after that morning's `"nightly-database-backup"` run) automatically restore-tests the latest `SUCCEEDED` `DATABASE` backup, so a broken backup is caught within the week, not discovered during a real incident. Run `npm run restore:test` manually anytime for an immediate check.
 
 ## 5. Rollback procedure (application deploys, not database restores)
 
@@ -191,9 +179,7 @@ pipeline is expected to honor:
 
 - No continuous WAL archiving / point-in-time recovery — RPO is bounded by
   backup cadence, not near-zero (Section 1).
-- Backups are not currently automated by any process running inside this
-  app — they require a real host-level cron entry (Section 2) to actually
-  run on a schedule; nothing here silently assumes that's already set up.
+- Backups and restore tests are now genuinely automated (Phase 20, Section 2/4 above) via the in-process BullMQ scheduler — but that scheduler only runs while the app process itself is up; a host-level cron entry remains the one guarantee independent of app uptime, and isn't configured by default in this environment.
 - Backups are stored on local disk only (`storage/backups/`) — there is no
   off-site/off-host replication of backup artifacts configured in this
   environment. A host-level disk failure would take out both the live

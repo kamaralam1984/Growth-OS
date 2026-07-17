@@ -1,0 +1,363 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "id": null,
+  "uid": "kvl-growthos-overview",
+  "title": "KVL GrowthOS — Overview",
+  "description": "Real dashboard-as-code wired to the Prometheus metrics genuinely emitted by src/lib/monitoring/metrics.ts via GET /api/metrics. Every panel below queries a metric name that actually exists in that file as of this writing — no invented series. This dashboard has NOT been rendered against a live Grafana in the environment it was authored in; it is real, valid JSON, not a verified screenshot. See docs/guides/operations-manual.md §2 for setup and that caveat in full.",
+  "tags": ["kvl-growthos", "prometheus", "operations"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "selected": true, "text": "Prometheus", "value": "prometheus" },
+        "hide": 0,
+        "refresh": 1
+      }
+    ]
+  },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "API traffic (kvl_api_* — trailing 5-minute APIUsage window)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "API requests (trailing 5m window)",
+      "description": "kvl_api_requests_recent_total — a Gauge set to a COUNT(*) of APIUsage rows over a trailing 5-minute window (see API_USAGE_WINDOW_MS in metrics.ts), not a monotonic counter. Graphed directly, never with rate()/increase().",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "graphMode": "area",
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "kvl_api_requests_recent_total",
+          "legendFormat": "requests / 5m",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "gauge",
+      "title": "API error rate (trailing 5m window)",
+      "description": "kvl_api_error_rate — fraction (0-1) of APIUsage rows with statusCode >= 400 in the same trailing 5-minute window.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.02 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "expr": "kvl_api_error_rate",
+          "legendFormat": "error rate",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "API avg response time (trailing 5m window)",
+      "description": "kvl_api_avg_response_time_ms — AVG(APIUsage.responseTimeMs) over the same trailing 5-minute window. Already an average computed server-side; there is no latency histogram metric in metrics.ts, so no histogram_quantile() is used anywhere in this dashboard.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 500 },
+              { "color": "red", "value": 1500 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "graphMode": "area",
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "kvl_api_avg_response_time_ms",
+          "legendFormat": "avg response time",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Process uptime",
+      "description": "kvl_process_uptime_seconds — process.uptime() of this Node server process.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "graphMode": "none",
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "kvl_process_uptime_seconds",
+          "legendFormat": "uptime",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "API requests & avg response time over time",
+      "description": "kvl_api_requests_recent_total and kvl_api_avg_response_time_ms plotted over time — both are already-aggregated trailing-5-minute-window gauges recomputed on every scrape, so the raw series itself (not rate()) is the meaningful trend.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 7 },
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": true } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "avg response time (ms)" },
+            "properties": [{ "id": "unit", "value": "ms" }]
+          }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "expr": "kvl_api_requests_recent_total",
+          "legendFormat": "requests / 5m",
+          "refId": "A"
+        },
+        {
+          "expr": "kvl_api_avg_response_time_ms",
+          "legendFormat": "avg response time (ms)",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "BullMQ queue depth (kvl_queue_jobs — mirrors /api/health's queue components)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Queue depth by state (active / waiting / delayed)",
+      "description": "kvl_queue_jobs{queue,state} for the scheduler / workflow / rag / billing queues (the QUEUE_GETTERS map in metrics.ts), restricted to the three “in flight” states.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": true } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "expr": "kvl_queue_jobs{state=~\"active|waiting|delayed\"}",
+          "legendFormat": "{{queue}} – {{state}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Failed jobs by queue",
+      "description": "kvl_queue_jobs{state=\"failed\"} per queue — /api/health marks a queue DEGRADED once this exceeds 20 (src/lib/monitoring/health.ts), so 20 is marked as a threshold line here.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": true,
+            "thresholdsStyle": { "mode": "line" }
+          },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 20 }] }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "expr": "kvl_queue_jobs{state=\"failed\"}",
+          "legendFormat": "{{queue}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Completed jobs by queue",
+      "description": "kvl_queue_jobs{state=\"completed\"} per queue — a cumulative BullMQ completed-count gauge, useful as a coarse throughput trend.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": true } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "expr": "kvl_queue_jobs{state=\"completed\"}",
+          "legendFormat": "{{queue}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "row",
+      "title": "Host / process resources (kvl_system_* and kvl_process_*)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "System load average",
+      "description": "kvl_system_load_average{interval} — os.loadavg() sampled fresh on every scrape, labeled 1m/5m/15m.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 33 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "spanNulls": true } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "expr": "kvl_system_load_average",
+          "legendFormat": "load {{interval}}",
+          "refId": "A"
+        },
+        {
+          "expr": "kvl_system_cpu_count",
+          "legendFormat": "logical CPUs",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "System memory (total vs. free)",
+      "description": "kvl_system_memory_bytes{state} — os.totalmem()/os.freemem(). “Used” is derived in-panel as total − free, both real label values of the same metric — no separate “used” gauge exists in metrics.ts.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 33 },
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": true } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "expr": "kvl_system_memory_bytes{state=\"total\"}",
+          "legendFormat": "total",
+          "refId": "A"
+        },
+        {
+          "expr": "kvl_system_memory_bytes{state=\"free\"}",
+          "legendFormat": "free",
+          "refId": "B"
+        },
+        {
+          "expr": "kvl_system_memory_bytes{state=\"total\"} - kvl_system_memory_bytes{state=\"free\"}",
+          "legendFormat": "used (total - free)",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "type": "timeseries",
+      "title": "Node process memory",
+      "description": "kvl_process_memory_bytes{type} — process.memoryUsage() broken out by rss / heap_total / heap_used / external / array_buffers.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 33 },
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": true } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "expr": "kvl_process_memory_bytes",
+          "legendFormat": "{{type}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

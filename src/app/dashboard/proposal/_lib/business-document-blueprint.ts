@@ -6,6 +6,7 @@ export interface BusinessDocumentBlueprintInput {
   content: string;
   organizationName: string;
   logoUrl?: string | null;
+  footerText?: string | null;
   gstNumber?: string | null;
   registrationNumber?: string | null;
   counterpartyName?: string | null;
@@ -45,7 +46,7 @@ export function buildBusinessDocumentBlueprint(input: BusinessDocumentBlueprintI
     tableOfContents: false,
     sections: [{ heading: KIND_LABEL[input.kind] ?? input.kind, body: input.content }],
     signatureBlock: input.needsSignature ? { parties: [{ role: input.counterpartyName ?? "Recipient" }, { role: input.organizationName }] } : undefined,
-    footerText: input.organizationName,
+    footerText: input.footerText ?? input.organizationName,
     generatedAt: input.createdAt,
   };
 }

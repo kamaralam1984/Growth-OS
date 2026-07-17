@@ -38,6 +38,7 @@ function Alert({ className, variant, ...props }: AlertProps) {
 
 function AlertTitle({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
   return (
+    // eslint-disable-next-line jsx-a11y/heading-has-content -- children come via {...props} at every real call site; the rule can't see that statically on a polymorphic wrapper.
     <h5
       data-slot="alert-title"
       className={cn("col-start-2 text-sm font-medium leading-tight", className)}

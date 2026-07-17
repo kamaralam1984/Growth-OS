@@ -1,5 +1,21 @@
 import Link from "next/link";
-import { Crown, Megaphone, FileText, Send, TrendingUp, Target, DollarSign, Scale } from "lucide-react";
+import {
+  Crown,
+  Megaphone,
+  FileText,
+  Send,
+  TrendingUp,
+  Target,
+  DollarSign,
+  Scale,
+  Users,
+  LifeBuoy,
+  UserSearch,
+  SearchCheck,
+  PieChart,
+  Microscope,
+  HeartHandshake,
+} from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { StatusDot } from "@/app/board/_components/status-dot";
@@ -22,6 +38,13 @@ const AGENT_ICONS: Partial<Record<AgentType, React.ComponentType<{ className?: s
   OUTREACH: Send,
   FINANCE: DollarSign,
   LEGAL: Scale,
+  HR: Users,
+  SUPPORT: LifeBuoy,
+  RECRUITMENT: UserSearch,
+  SEO: SearchCheck,
+  BUSINESS_ANALYST: PieChart,
+  RESEARCH: Microscope,
+  CUSTOMER_SUCCESS: HeartHandshake,
 };
 
 const BUSY_STATUSES = new Set<AgentStatus>(["THINKING", "RESEARCHING", "PLANNING", "ANALYZING"]);

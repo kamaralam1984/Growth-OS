@@ -28,6 +28,7 @@ import {
   ShieldAlert,
   Clock,
   MessageSquare,
+  Sparkles,
 } from "lucide-react";
 
 import { cn, formatRelativeTime } from "@/lib/utils";
@@ -73,6 +74,8 @@ const NOTIFICATION_ICONS: Record<NotificationType, React.ComponentType<{ classNa
   CLIENT_COMMENT_ADDED: MessageSquare,
   CLIENT_APPROVED_MILESTONE: ThumbsUp,
   DELIVERY_HEALTH_DROPPED: AlertTriangle,
+  COMPANY_DNA_READY: Sparkles,
+  DAILY_BRIEF_READY: Sparkles,
 };
 
 /** Category grouping for the notification-center tab bar. */

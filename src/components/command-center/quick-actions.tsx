@@ -27,12 +27,13 @@ export interface QuickActionsProps {
   agents: Array<{ id: string; name: string }>;
   users: Array<{ id: string; name: string | null }>;
   companies: Array<{ id: string; name: string }>;
+  clients: Array<{ id: string; name: string }>;
 }
 
 type ActiveForm = "lead" | "task" | "meeting" | "ai-meeting" | "proposal" | null;
 
 /** Floating action cluster: fast paths to the six things a user does most from anywhere in the Command Center. */
-export function QuickActions({ agents, users, companies }: QuickActionsProps) {
+export function QuickActions({ agents, users, companies, clients }: QuickActionsProps) {
   const t = useT();
   const [expanded, setExpanded] = React.useState(false);
   const [activeForm, setActiveForm] = React.useState<ActiveForm>(null);
@@ -50,6 +51,7 @@ export function QuickActions({ agents, users, companies }: QuickActionsProps) {
             agents={agents}
             users={users}
             companies={companies}
+            clients={clients}
             onClose={() => setActiveForm(null)}
             onDone={() => {
               setActiveForm(null);
@@ -154,6 +156,7 @@ function QuickFormPanel({
   agents,
   users,
   companies,
+  clients,
   onClose,
   onDone,
 }: {
@@ -161,12 +164,13 @@ function QuickFormPanel({
   agents: QuickActionsProps["agents"];
   users: QuickActionsProps["users"];
   companies: QuickActionsProps["companies"];
+  clients: QuickActionsProps["clients"];
   onClose: () => void;
   onDone: () => void;
 }) {
   const router = useRouter();
 
-  if (form === "lead") return <LeadForm onClose={onClose} onDone={onDone} router={router} />;
+  if (form === "lead") return <LeadForm clients={clients} onClose={onClose} onDone={onDone} router={router} />;
   if (form === "task") return <TaskForm agents={agents} users={users} onClose={onClose} onDone={onDone} />;
   if (form === "meeting") return <MeetingForm onClose={onClose} />;
   if (form === "ai-meeting") return <AiMeetingForm onClose={onClose} />;
@@ -174,10 +178,12 @@ function QuickFormPanel({
 }
 
 function LeadForm({
+  clients,
   onClose,
   onDone,
   router,
 }: {
+  clients: QuickActionsProps["clients"];
   onClose: () => void;
   onDone: () => void;
   router: ReturnType<typeof useRouter>;
@@ -186,6 +192,7 @@ function LeadForm({
   const [company, setCompany] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [estimatedValue, setEstimatedValue] = React.useState("");
+  const [referredByClientId, setReferredByClientId] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [success, setSuccess] = React.useState(false);
   const [pending, startTransition] = React.useTransition();
@@ -199,6 +206,7 @@ function LeadForm({
         company: company || undefined,
         email: email || undefined,
         estimatedValue: estimatedValue ? Number(estimatedValue) : undefined,
+        referredByClientId: referredByClientId || undefined,
       });
       if (!result.ok) {
         setError(result.error ?? "Something went wrong.");
@@ -227,6 +235,14 @@ function LeadForm({
             value={estimatedValue}
             onChange={(e) => setEstimatedValue(e.target.value)}
           />
+          <Select value={referredByClientId} onChange={(e) => setReferredByClientId(e.target.value)}>
+            <option value="">Not referred by a client</option>
+            {clients.map((c) => (
+              <option key={c.id} value={c.id}>
+                Referred by: {c.name}
+              </option>
+            ))}
+          </Select>
           {error && <p className="text-xs text-destructive">{error}</p>}
           <Button type="submit" size="sm" disabled={pending || !name.trim()} className="mt-1">
             {pending ? "Creating…" : "Create lead"}

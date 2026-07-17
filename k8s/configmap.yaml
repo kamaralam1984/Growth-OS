@@ -1,0 +1,17 @@
+# Real, non-secret runtime configuration — anything with an actual
+# credential goes in secret.example.yaml instead, never here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kvl-growthos-config
+  namespace: kvl-growthos
+data:
+  NODE_ENV: "production"
+  PORT: "3000"
+  HOSTNAME: "0.0.0.0"
+  NEXT_TELEMETRY_DISABLED: "1"
+  # Every optional integration (AI providers, payment gateways, OAuth,
+  # SMTP) is intentionally absent here — this app degrades honestly to
+  # "not configured" for anything unset (see .env.example), so a minimal
+  # ConfigMap is a valid, real starting point, not an incomplete one.
+  AUTH_TRUST_HOST: "true"

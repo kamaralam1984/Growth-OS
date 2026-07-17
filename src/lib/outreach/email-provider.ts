@@ -21,6 +21,7 @@
 
 import { getConnection, getFreshAccessToken } from "@/lib/integrations/connection-store";
 import { recordAPIUsage } from "@/lib/api-usage";
+import { getWhiteLabelEmailFrom } from "@/lib/white-label/resolve-brand";
 
 export interface OutreachEmailInput {
   to: string;
@@ -37,8 +38,9 @@ export function isEmailSendingConfigured(): boolean {
   return Boolean(process.env.RESEND_API_KEY || process.env.EMAIL_SERVER);
 }
 
-async function sendViaResend(input: OutreachEmailInput): Promise<OutreachEmailResult> {
+async function sendViaResend(input: OutreachEmailInput, emailFrom: { name: string; address: string } | null): Promise<OutreachEmailResult> {
   try {
+    const from = emailFrom ? `"${emailFrom.name}" <${emailFrom.address}>` : (process.env.EMAIL_FROM ?? "no-reply@kvlgrowthos.local");
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
@@ -46,7 +48,7 @@ async function sendViaResend(input: OutreachEmailInput): Promise<OutreachEmailRe
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: process.env.EMAIL_FROM ?? "no-reply@kvlgrowthos.local",
+        from,
         to: input.to,
         subject: input.subject,
         html: input.html,
@@ -64,13 +66,14 @@ async function sendViaResend(input: OutreachEmailInput): Promise<OutreachEmailRe
   }
 }
 
-async function sendViaSmtp(input: OutreachEmailInput): Promise<OutreachEmailResult> {
+async function sendViaSmtp(input: OutreachEmailInput, emailFrom: { name: string; address: string } | null): Promise<OutreachEmailResult> {
   try {
+    const from = emailFrom ? `"${emailFrom.name}" <${emailFrom.address}>` : (process.env.EMAIL_FROM ?? "no-reply@kvlgrowthos.local");
     const nodemailer = await import("nodemailer");
     const transport = nodemailer.createTransport(process.env.EMAIL_SERVER!);
     await transport.sendMail({
       to: input.to,
-      from: process.env.EMAIL_FROM ?? "no-reply@kvlgrowthos.local",
+      from,
       subject: input.subject,
       html: input.html,
       text: input.text,
@@ -187,8 +190,11 @@ export async function sendOutreachEmail(organizationId: string, input: OutreachE
     return sendViaOutlook(organizationId, outlookConnection?.id, outlookToken, input);
   }
 
-  if (process.env.RESEND_API_KEY) return sendViaResend(input);
-  if (process.env.EMAIL_SERVER) return sendViaSmtp(input);
+  if (process.env.RESEND_API_KEY || process.env.EMAIL_SERVER) {
+    const emailFrom = await getWhiteLabelEmailFrom(organizationId);
+    if (process.env.RESEND_API_KEY) return sendViaResend(input, emailFrom);
+    return sendViaSmtp(input, emailFrom);
+  }
   return {
     ok: false,
     errorKind: "not_configured",

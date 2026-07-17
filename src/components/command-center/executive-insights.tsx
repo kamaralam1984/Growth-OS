@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { Target, AlertTriangle, TrendingUp, Handshake, Megaphone, Zap, RefreshCw, Sparkles } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AiErrorBanner, type AIErrorKind } from "@/app/board/_components/ai-error-banner";
 import { glowPulse } from "@/animations";
@@ -77,9 +78,16 @@ export function ExecutiveInsights({ initialInsights }: { initialInsights: Insigh
               const Icon = INSIGHT_ICONS[insight.type];
               return (
                 <div key={insight.id} className="flex flex-col gap-1.5 rounded-xl border border-border p-4">
-                  <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-primary">
-                    <Icon className="size-3.5" />
-                    {INSIGHT_LABELS[insight.type]}
+                  <span className="flex items-center justify-between gap-1.5">
+                    <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-primary">
+                      <Icon className="size-3.5" />
+                      {INSIGHT_LABELS[insight.type]}
+                    </span>
+                    {insight.impactsCustomer && (
+                      <Badge variant="outline" className="text-[10px] text-amber-600 dark:text-amber-400">
+                        Customer-impacting
+                      </Badge>
+                    )}
                   </span>
                   <p className="text-sm font-medium text-foreground">{insight.title}</p>
                   <p className="text-xs text-muted-foreground">{insight.description}</p>

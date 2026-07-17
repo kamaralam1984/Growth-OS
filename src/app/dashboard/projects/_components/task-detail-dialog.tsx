@@ -83,7 +83,9 @@ export function TaskDetailDialog({ task, members, milestones, sprints, canManage
   }
 
   return (
+    // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- backdrop click-to-close; the real keyboard equivalent (Escape) is already wired globally above (handleEscape), not per-element.
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- pure event-bubbling guard (stops the backdrop's close-click from firing when clicking inside the panel), not an interactive control itself. */}
       <div className="glass-panel-strong w-full max-w-lg rounded-2xl p-5" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-foreground">Task details</h2>

@@ -21,6 +21,11 @@ const InsightItemSchema = z.object({
   type: z.enum(INSIGHT_TYPES),
   title: z.string().trim().min(1).max(120),
   description: z.string().trim().min(1),
+  // Informational flag only — never gates dismissal or action. True when
+  // acting on this insight would touch pricing, contracts, or customer
+  // communications; the UI badges it, but any actionable button still
+  // routes through the existing Proposal/Outreach approval flows.
+  impactsCustomer: z.boolean(),
 });
 
 const InsightsResponseSchema = z.object({
@@ -127,7 +132,7 @@ export async function generateExecutiveInsights(organizationId: string): Promise
 
   try {
     const result = await generateStructured({
-      system: `${persona.systemPrompt}\n\nYou are generating the Executive Insights panel on the Command Center dashboard. You must produce exactly one insight for EACH of these categories: ${INSIGHT_TYPES.join(", ")}. Ground every single insight strictly in the real company data given to you below — never invent a lead, a number, a deal, or an event that isn't in that data. If a category genuinely has no real signal to point to yet (for example: there is no top opportunity because there are no leads with value recorded yet), say that honestly as the insight itself rather than fabricating one.`,
+      system: `${persona.systemPrompt}\n\nYou are generating the Executive Insights panel on the Command Center dashboard. You must produce exactly one insight for EACH of these categories: ${INSIGHT_TYPES.join(", ")}. Ground every single insight strictly in the real company data given to you below — never invent a lead, a number, a deal, or an event that isn't in that data. If a category genuinely has no real signal to point to yet (for example: there is no top opportunity because there are no leads with value recorded yet), say that honestly as the insight itself rather than fabricating one. Set impactsCustomer: true only when acting on the insight would touch pricing, a contract, or direct customer communication — most insights (internal productivity, general growth direction) should be false.`,
       userContent: `Here is the real, current state of the company:\n\n${dataSummary}\n\nGenerate the 7 required insights now.`,
       maxTokens: 2048,
       effort: "medium",
@@ -146,6 +151,7 @@ export async function generateExecutiveInsights(organizationId: string): Promise
             type: insight.type,
             title: insight.title,
             description: insight.description,
+            impactsCustomer: insight.impactsCustomer,
           },
         }),
       ),

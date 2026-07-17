@@ -19,6 +19,7 @@ import {
 } from "@/lib/validations/discovery";
 import { addCompanyTimelineEvent } from "@/lib/company-intelligence";
 import { scoreCompany } from "@/lib/lead-scoring";
+import { findOrCreateCompany } from "@/lib/business-development/dedup";
 
 export interface ActionResult {
   ok: boolean;
@@ -32,6 +33,7 @@ export interface SearchLeadsResult extends ActionResult {
 
 export interface SaveLeadsResult extends ActionResult {
   savedCount?: number;
+  duplicatesSkipped?: number;
 }
 
 function describeAIError(error: unknown): ActionResult {
@@ -124,20 +126,27 @@ export async function saveDiscoveredLeads(companies: DiscoveredCompany[]): Promi
     if (!stage) return { ok: false, error: "No pipeline stage is configured for your organization yet." };
 
     let savedCount = 0;
+    let duplicatesSkipped = 0;
     for (const item of parsed.data) {
-      const company = await prisma.company.create({
-        data: {
-          organizationId,
-          name: item.name,
-          website: item.website || null,
-          industry: item.industry || null,
-          email: item.email || null,
-          phone: item.phone || null,
-          notes: item.reason || null,
-          source: "LEAD_FINDER",
-          status: "LEAD",
-        },
+      const { company, wasCreated } = await findOrCreateCompany({
+        organizationId,
+        name: item.name,
+        website: item.website,
+        industry: item.industry,
+        email: item.email,
+        notes: item.reason,
+        source: "LEAD_FINDER",
+        status: "LEAD",
       });
+
+      if (!wasCreated) {
+        const existingLead = await prisma.lead.findFirst({ where: { companyId: company.id } });
+        if (existingLead) {
+          duplicatesSkipped += 1;
+          continue; // already in the pipeline — never a duplicate Company or Lead row
+        }
+      }
+
       await prisma.lead.create({
         data: {
           pipelineStageId: stage.id,
@@ -161,17 +170,17 @@ export async function saveDiscoveredLeads(companies: DiscoveredCompany[]): Promi
     await logActivity({
       organizationId,
       type: "SYSTEM_EVENT",
-      description: `${session.user?.name ?? "A team member"} saved ${savedCount} lead${savedCount === 1 ? "" : "s"} found by Lead Finder.`,
+      description: `${session.user?.name ?? "A team member"} saved ${savedCount} lead${savedCount === 1 ? "" : "s"} found by Lead Finder${duplicatesSkipped > 0 ? ` (${duplicatesSkipped} already existed)` : ""}.`,
       actorUserId: userId,
-      metadata: { count: savedCount },
+      metadata: { count: savedCount, duplicatesSkipped },
     });
-    await logAudit({ userId, organizationId, action: "lead_finder.leads_saved", metadata: { count: savedCount } });
+    await logAudit({ userId, organizationId, action: "lead_finder.leads_saved", metadata: { count: savedCount, duplicatesSkipped } });
 
     revalidatePath("/dashboard/lead-finder");
     revalidatePath("/dashboard/companies");
     revalidatePath("/dashboard/crm");
     revalidatePath("/dashboard");
-    return { ok: true, savedCount };
+    return { ok: true, savedCount, duplicatesSkipped };
   } catch (error) {
     console.error("[lead-finder] saveDiscoveredLeads failed:", error);
     return { ok: false, errorKind: "generic", error: "Something went wrong saving these leads. Please try again." };

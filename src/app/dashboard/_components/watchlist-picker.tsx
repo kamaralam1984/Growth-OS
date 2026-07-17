@@ -43,6 +43,7 @@ export function WatchlistPicker({ companyId, watchlists, memberOf }: WatchlistPi
   if (watchlists.length === 0) return null;
 
   return (
+    // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- pure event-bubbling guard (stops a click from reaching an ancestor Link/row), not an interactive control itself; the real <button> below already has its own keyboard-accessible onClick.
     <div className="relative" onClick={(e) => e.preventDefault()}>
       <button
         type="button"

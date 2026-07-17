@@ -34,6 +34,10 @@ const createLeadSchema = z.object({
   company: z.string().trim().max(200).optional().or(z.literal("")),
   email: z.string().trim().toLowerCase().email("Enter a valid email address.").optional().or(z.literal("")),
   estimatedValue: z.coerce.number().nonnegative("Estimated value can't be negative.").optional(),
+  // Referral Engine attribution — only ever set via this explicit picker,
+  // never AI-inferred. Validated against the caller's own organization
+  // below so a user can't attribute a lead to another org's client.
+  referredByClientId: z.string().trim().min(1).optional(),
 });
 
 export type CreateLeadInput = z.infer<typeof createLeadSchema>;
@@ -73,6 +77,17 @@ export async function createLead(input: CreateLeadInput): Promise<CreateLeadResu
       return { ok: false, error: "No pipeline stage is configured for your organization yet." };
     }
 
+    let referredByClientId: string | null = null;
+    if (parsed.data.referredByClientId) {
+      const referringClient = await prisma.client.findUnique({
+        where: { id: parsed.data.referredByClientId },
+        select: { organizationId: true },
+      });
+      if (referringClient && referringClient.organizationId === organizationId) {
+        referredByClientId = parsed.data.referredByClientId;
+      }
+    }
+
     const lead = await prisma.lead.create({
       data: {
         pipelineStageId: stage.id,
@@ -80,6 +95,7 @@ export async function createLead(input: CreateLeadInput): Promise<CreateLeadResu
         company: parsed.data.company || null,
         email: parsed.data.email || null,
         estimatedValue: parsed.data.estimatedValue ?? null,
+        referredByClientId,
       },
     });
 

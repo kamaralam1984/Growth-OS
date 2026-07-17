@@ -1,0 +1,25 @@
+# A real, one-shot Job that runs `prisma migrate deploy` against the real
+# DATABASE_URL before/during a rollout — the same command
+# .github/workflows/deploy.yml already runs from CI, just as a cluster-
+# native step for a Kubernetes-based deploy pipeline. Uses the same app
+# image (it already has the Prisma CLI + schema baked in from the build
+# stage) rather than a separate migration-only image.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kvl-growthos-migrate
+  namespace: kvl-growthos
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: ghcr.io/your-org/kvl-growthos:latest
+          command: ["npx", "prisma", "migrate", "deploy"]
+          envFrom:
+            - configMapRef:
+                name: kvl-growthos-config
+            - secretRef:
+                name: kvl-growthos-secrets

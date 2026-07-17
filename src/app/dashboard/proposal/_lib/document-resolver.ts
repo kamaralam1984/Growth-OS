@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import type { DocumentBlueprint, DocumentEngineKind } from "@/lib/documents";
 import type { ProposalSections } from "@/lib/ai/document-engine";
+import { getEffectiveBranding } from "@/lib/white-label/resolve-brand";
 import { buildProposalBlueprint } from "./proposal-blueprint";
 import { buildQuotationBlueprint } from "./quotation-blueprint";
 import { buildContractBlueprint } from "./contract-blueprint";
@@ -15,11 +16,26 @@ export interface ResolvedDocument {
   filenameBase: string;
 }
 
+/**
+ * White Label (Phase 20): every generated PDF now shows the org's real
+ * white-label brand name/logo when white-labeling is enabled/entitled
+ * (getEffectiveBranding — the same single source of truth the dashboard
+ * chrome and Client Portal use), falling back to the plain
+ * Organization.name/logo exactly as before when it isn't. gstNumber/
+ * registrationNumber/currency are always the org's own real values —
+ * white-labeling only ever overrides display branding, never legal/tax
+ * identifiers.
+ */
 async function resolveBrand(organizationId: string) {
-  const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { name: true, logo: true, gstNumber: true, registrationNumber: true, currency: true } });
+  const [org, branding] = await Promise.all([
+    prisma.organization.findUnique({ where: { id: organizationId }, select: { name: true, logo: true, gstNumber: true, registrationNumber: true, currency: true } }),
+    getEffectiveBranding(organizationId),
+  ]);
+  const organizationName = branding.isWhiteLabeled ? branding.brandName : (org?.name ?? "Organization");
   return {
-    organizationName: org?.name ?? "Organization",
-    logoUrl: org?.logo ?? null,
+    organizationName,
+    logoUrl: branding.isWhiteLabeled ? branding.logoUrl : (org?.logo ?? null),
+    footerText: branding.isWhiteLabeled ? (branding.pdfFooterText ?? organizationName) : organizationName,
     gstNumber: org?.gstNumber ?? null,
     registrationNumber: org?.registrationNumber ?? null,
     currency: org?.currency ?? null,
@@ -54,6 +70,7 @@ export async function resolveDocumentById(kind: DocumentEngineKind, id: string):
           documentNumber: `PROP-${proposal.id.slice(-8).toUpperCase()}`,
           organizationName: brand.organizationName,
           logoUrl: brand.logoUrl,
+          footerText: brand.footerText,
           gstNumber: brand.gstNumber,
           registrationNumber: brand.registrationNumber,
           companyName: proposal.company?.name ?? null,
@@ -79,6 +96,7 @@ export async function resolveDocumentById(kind: DocumentEngineKind, id: string):
           quotationNumber: quotation.quotationNumber,
           organizationName: brand.organizationName,
           logoUrl: brand.logoUrl,
+          footerText: brand.footerText,
           gstNumber: brand.gstNumber,
           registrationNumber: brand.registrationNumber,
           companyName: quotation.company?.name ?? null,
@@ -114,6 +132,7 @@ export async function resolveDocumentById(kind: DocumentEngineKind, id: string):
           content: contract.content,
           organizationName: brand.organizationName,
           logoUrl: brand.logoUrl,
+          footerText: brand.footerText,
           gstNumber: brand.gstNumber,
           registrationNumber: brand.registrationNumber,
           clientName,
@@ -142,6 +161,7 @@ export async function resolveDocumentById(kind: DocumentEngineKind, id: string):
           type: invoice.type,
           organizationName: brand.organizationName,
           logoUrl: brand.logoUrl,
+          footerText: brand.footerText,
           gstNumber: brand.gstNumber,
           registrationNumber: brand.registrationNumber,
           companyName: invoice.company?.name ?? null,
@@ -177,6 +197,7 @@ export async function resolveDocumentById(kind: DocumentEngineKind, id: string):
           content: document.content,
           organizationName: brand.organizationName,
           logoUrl: brand.logoUrl,
+          footerText: brand.footerText,
           gstNumber: brand.gstNumber,
           registrationNumber: brand.registrationNumber,
           companyName: document.company?.name ?? null,

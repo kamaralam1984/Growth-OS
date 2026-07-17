@@ -10,6 +10,7 @@ export interface ProposalBlueprintInput {
   documentNumber: string;
   organizationName: string;
   logoUrl?: string | null;
+  footerText?: string | null;
   gstNumber?: string | null;
   registrationNumber?: string | null;
   companyName?: string | null;
@@ -123,7 +124,7 @@ export function buildProposalBlueprint(input: ProposalBlueprintInput): DocumentB
     pricingTable: input.value != null ? { headers: ["Description", "Amount"], rows: [[input.title, formatCurrencyValue(input.value, input.currency)]], alignRightColumns: [1] } : undefined,
     totalsSummary: input.value != null ? [{ label: "Total", value: formatCurrencyValue(input.value, input.currency), emphasis: true }] : undefined,
     signatureBlock: { parties: [{ role: "Client", name: input.contactName ?? undefined }, { role: input.organizationName }] },
-    footerText: input.organizationName,
+    footerText: input.footerText ?? input.organizationName,
     generatedAt: input.createdAt,
   };
 }

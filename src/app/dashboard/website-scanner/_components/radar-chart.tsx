@@ -25,10 +25,11 @@ export function RadarChart({ axes }: { axes: RadarAxis[] }) {
   const total = axes.length;
   const dataPoints = axes.map((a, i) => pointFor(i, total, a.value));
   const dataPath = dataPoints.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ") + " Z";
+  const ariaLabel = `Radar chart with ${axes.length} dimensions: ${axes.map((a) => `${a.label} ${Math.round(a.value)}/100`).join(", ")}`;
 
   return (
     <div className="flex flex-col items-center gap-2">
-      <svg viewBox={`0 0 ${SIZE} ${SIZE}`} width={SIZE} height={SIZE}>
+      <svg viewBox={`0 0 ${SIZE} ${SIZE}`} width={SIZE} height={SIZE} role="img" aria-label={ariaLabel}>
         {RINGS.map((r) => (
           <circle key={r} cx={CENTER} cy={CENTER} r={(r / 100) * MAX_RADIUS} fill="none" stroke="var(--color-border)" strokeWidth={1} />
         ))}

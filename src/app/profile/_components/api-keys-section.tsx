@@ -148,6 +148,7 @@ export function ApiKeysSection({ initialKeys }: ApiKeysSectionProps) {
                   <label key={scope} className="flex items-start gap-2 text-sm text-foreground">
                     <input
                       type="checkbox"
+                      aria-label={scope}
                       className="mt-0.5"
                       checked={scopes.includes(scope)}
                       onChange={() => toggleScope(scope)}

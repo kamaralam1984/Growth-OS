@@ -44,6 +44,7 @@ export async function collectUserDataExport(userId: string) {
     createdQuotations,
     createdContracts,
     createdInvoices,
+    consentRecords,
   ] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
@@ -116,6 +117,7 @@ export async function collectUserDataExport(userId: string) {
     prisma.quotation.findMany({ where: { createdByUserId: userId } }),
     prisma.contract.findMany({ where: { createdByUserId: userId } }),
     prisma.invoice.findMany({ where: { createdByUserId: userId } }),
+    prisma.consentRecord.findMany({ where: { userId }, orderBy: { createdAt: "desc" } }),
   ]);
 
   return {
@@ -140,5 +142,6 @@ export async function collectUserDataExport(userId: string) {
     bookmarks,
     searchHistory,
     commercialDocumentsCreated: { quotations: createdQuotations, contracts: createdContracts, invoices: createdInvoices },
+    consentRecords,
   };
 }

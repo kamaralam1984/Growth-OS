@@ -103,8 +103,10 @@ function Pricing() {
           onValueChange={(value) => setPeriod(value as BillingPeriod)}
         >
           <TabsList>
-            <TabsTrigger value="monthly">Monthly</TabsTrigger>
-            <TabsTrigger value="yearly" className="gap-2">
+            <TabsTrigger value="monthly" hasPanel={false}>
+              Monthly
+            </TabsTrigger>
+            <TabsTrigger value="yearly" className="gap-2" hasPanel={false}>
               Yearly
               <Badge
                 variant="accent"

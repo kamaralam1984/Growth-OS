@@ -31,6 +31,7 @@ export default async function AlertsPage() {
     metricValue: a.metricValue,
     thresholdValue: a.thresholdValue,
     formula: a.formula,
+    mitigationSuggestions: a.mitigationSuggestions,
     triggeredAt: a.triggeredAt.toISOString(),
     acknowledgedAt: a.acknowledgedAt ? a.acknowledgedAt.toISOString() : null,
     resolvedAt: a.resolvedAt ? a.resolvedAt.toISOString() : null,

@@ -27,10 +27,11 @@ export function RadarChart({
 
   const polygon = axes.map((a, i) => pointAt(i, a.value)).map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
   const rings = [25, 50, 75, 100];
+  const ariaLabel = `Radar chart with ${axes.length} dimensions: ${axes.map((a) => `${a.label} ${Math.round(a.value)}/100`).join(", ")}`;
 
   return (
     <div className="flex flex-col items-center gap-1">
-      <svg viewBox={`0 0 ${size} ${size}`} className="h-auto w-full max-w-xs" role="img">
+      <svg viewBox={`0 0 ${size} ${size}`} className="h-auto w-full max-w-xs" role="img" aria-label={ariaLabel}>
         {rings.map((ring) => (
           <polygon
             key={ring}

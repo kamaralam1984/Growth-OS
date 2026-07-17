@@ -19,10 +19,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { prisma } from "@/lib/prisma";
 import { getAICreditAvailability } from "@/lib/billing/ai-credits";
 import { listConfiguredGateways } from "@/lib/billing/gateway/registry";
+import { SUPPORTED_PLAN_CURRENCIES } from "@/lib/billing/plan-catalog";
 import { requireActiveMembership } from "../../_lib/require-membership";
 import { PlanComparison } from "./_components/plan-comparison";
 import { SubscriptionActions } from "./_components/subscription-actions";
 import { BillingAddressForm } from "./_components/billing-address-form";
+import { ShareInvoiceLinkDialog } from "./_components/share-invoice-link-dialog";
 import type { BillingStatus, PlatformInvoiceStatus } from "@/generated/prisma/client";
 
 const EDITOR_ROLES = new Set(["OWNER", "ADMIN"]);
@@ -79,6 +81,13 @@ export default async function BillingSubscriptionPage({
   const canManage = EDITOR_ROLES.has(membership.role);
   const params = await searchParams;
 
+  // Real per-currency Plan pricing (Phase 20) — an org sees/selects plans
+  // priced in its own Organization.currency; SUPPORTED_PLAN_CURRENCIES.
+  // includes(...) guards against an org whose currency has no seeded plan
+  // rows (falls back to USD rather than showing an empty comparison).
+  const orgCurrency = membership.organization.currency;
+  const planCurrency = orgCurrency && (SUPPORTED_PLAN_CURRENCIES as readonly string[]).includes(orgCurrency) ? orgCurrency : "USD";
+
   const [billingAccount, invoices, plans, aiCredits, configuredGateways] = await Promise.all([
     prisma.billingAccount.upsert({
       where: { organizationId },
@@ -91,7 +100,7 @@ export default async function BillingSubscriptionPage({
       orderBy: { issuedAt: "desc" },
       take: 50,
     }),
-    prisma.plan.findMany({ where: { status: "ACTIVE" }, orderBy: [{ tier: "asc" }, { interval: "asc" }] }),
+    prisma.plan.findMany({ where: { status: "ACTIVE", currency: planCurrency }, orderBy: [{ tier: "asc" }, { interval: "asc" }] }),
     getAICreditAvailability(organizationId),
     Promise.resolve(listConfiguredGateways()),
   ]);
@@ -296,13 +305,16 @@ export default async function BillingSubscriptionPage({
                       </TableCell>
                       <TableCell className="text-right text-muted-foreground">{formatMoney(invoice.totalCents, invoice.currency)}</TableCell>
                       <TableCell className="text-right">
-                        <a
-                          href={`/api/platform-invoices/${invoice.id}`}
-                          className="inline-flex items-center gap-1.5 text-xs font-medium text-foreground hover:text-primary"
-                          aria-label={`Download invoice ${invoice.invoiceNumber}`}
-                        >
-                          <Download className="size-3.5" /> Download
-                        </a>
+                        <div className="flex items-center justify-end gap-3">
+                          <a
+                            href={`/api/platform-invoices/${invoice.id}`}
+                            className="inline-flex items-center gap-1.5 text-xs font-medium text-foreground hover:text-primary"
+                            aria-label={`Download invoice ${invoice.invoiceNumber}`}
+                          >
+                            <Download className="size-3.5" /> Download
+                          </a>
+                          {canManage && <ShareInvoiceLinkDialog invoiceId={invoice.id} invoiceNumber={invoice.invoiceNumber} />}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}

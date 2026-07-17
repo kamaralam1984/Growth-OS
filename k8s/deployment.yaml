@@ -1,0 +1,76 @@
+# The app itself. Liveness/readiness probes hit the real /api/health route
+# (src/app/api/health/route.ts) — a genuine DB/Redis/queue/storage probe,
+# never a bare "process is alive" check, so Kubernetes only routes traffic
+# to (and only keeps running) pods that are actually able to serve requests.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kvl-growthos
+  namespace: kvl-growthos
+  labels:
+    app: kvl-growthos
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: kvl-growthos
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: kvl-growthos
+    spec:
+      containers:
+        - name: kvl-growthos
+          # Replace with your real, pushed image — see
+          # .github/workflows/deploy.yml, which already builds and pushes
+          # to GHCR (ghcr.io/<org>/kvl-growthos:<tag>) on every deploy run.
+          image: ghcr.io/your-org/kvl-growthos:latest
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: kvl-growthos-config
+            - secretRef:
+                name: kvl-growthos-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Real uploaded-document storage needs a real persistent volume
+          # in a multi-replica deployment — an emptyDir (as below) is only
+          # correct for a single-replica/dev deployment, since it's
+          # per-pod, not shared. For real multi-replica production, mount a
+          # ReadWriteMany PVC (e.g. an NFS/EFS-backed StorageClass) or,
+          # better, migrate document storage to real object storage (S3-
+          # compatible) — see src/lib/storage/file-store.ts's own
+          # local-disk-only documented limitation.
+          volumeMounts:
+            - name: storage-documents
+              mountPath: /app/storage/documents
+      volumes:
+        - name: storage-documents
+          emptyDir: {}

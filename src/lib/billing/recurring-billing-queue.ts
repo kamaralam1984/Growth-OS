@@ -5,6 +5,7 @@ import { notifyOrganizationOwners } from "@/lib/notifications";
 import { createRedisClient, type RedisLikeClient } from "@/lib/redis-client";
 import { getGateway } from "./gateway/registry";
 import { mapGatewayStatus } from "./subscriptions";
+import { uninstallListing } from "@/lib/marketplace/install-engine";
 
 /**
  * A dedicated BullMQ queue for the platform's recurring billing jobs —
@@ -24,7 +25,7 @@ import { mapGatewayStatus } from "./subscriptions";
 
 const QUEUE_NAME = "kvl-billing-recurring";
 
-type RecurringBillingJobName = "renewal-sweep" | "trial-reminder" | "dunning" | "credit-reset";
+type RecurringBillingJobName = "renewal-sweep" | "trial-reminder" | "dunning" | "credit-reset" | "marketplace-subscription-renewal-sweep";
 
 interface RecurringBillingJobData {
   job: RecurringBillingJobName;
@@ -97,6 +98,51 @@ async function runRenewalSweep(): Promise<void> {
       });
     } catch (error) {
       console.error(`[billing/recurring-queue] renewal sweep failed for BillingAccount ${account.id}:`, error);
+    }
+  }
+}
+
+/**
+ * Same reconciliation-net pattern as runRenewalSweep, scoped to
+ * SUBSCRIPTION-priced MarketplaceInstall rows instead of BillingAccount —
+ * for any ACTIVE marketplace subscription install past its real
+ * currentPeriodEnd with a real gatewaySubscriptionId on file, re-fetches
+ * the live subscription from its real gateway and syncs status/period.
+ * Never itself charges — the gateway's own recurring billing does that;
+ * this only syncs state and auto-uninstalls on real cancellation, exactly
+ * like a platform subscription lapsing.
+ */
+async function runMarketplaceSubscriptionRenewalSweep(): Promise<void> {
+  const now = new Date();
+  const installs = await prisma.marketplaceInstall.findMany({
+    where: { status: "ACTIVE", gatewaySubscriptionId: { not: null }, gatewayProvider: { not: null }, currentPeriodEnd: { lt: now } },
+  });
+
+  for (const install of installs) {
+    if (!install.gatewaySubscriptionId || !install.gatewayProvider) continue;
+    try {
+      const gateway = getGateway(install.gatewayProvider);
+      if (!gateway.isConfigured()) continue;
+
+      const snapshot = await gateway.getSubscription(install.gatewaySubscriptionId);
+      if (!snapshot) continue;
+
+      const status = mapGatewayStatus(snapshot.status);
+      if (status === "CANCELED") {
+        await uninstallListing({ organizationId: install.organizationId, listingId: install.listingId, uninstalledByUserId: install.installedByUserId });
+        continue;
+      }
+
+      await prisma.marketplaceInstall.update({
+        where: { id: install.id },
+        data: {
+          currentPeriodStart: snapshot.currentPeriodStart ?? install.currentPeriodStart,
+          currentPeriodEnd: snapshot.currentPeriodEnd ?? install.currentPeriodEnd,
+          cancelAtPeriodEnd: snapshot.cancelAtPeriodEnd,
+        },
+      });
+    } catch (error) {
+      console.error(`[billing/recurring-queue] marketplace subscription sweep failed for MarketplaceInstall ${install.id}:`, error);
     }
   }
 }
@@ -208,6 +254,8 @@ async function processRecurringBillingJob(bullJob: BullJob<RecurringBillingJobDa
       return runDunning();
     case "credit-reset":
       return runCreditReset();
+    case "marketplace-subscription-renewal-sweep":
+      return runMarketplaceSubscriptionRenewalSweep();
   }
 }
 
@@ -227,6 +275,7 @@ const JOB_SCHEDULES: Array<{ job: RecurringBillingJobName; cronExpression: strin
   { job: "credit-reset", cronExpression: "0 1 * * *" }, // daily 01:00 — cheap to check daily even though each org's own period only actually resets monthly
   { job: "trial-reminder", cronExpression: "0 9 * * *" }, // daily 09:00 — a reasonable local-morning-ish send time
   { job: "dunning", cronExpression: "0 10 * * *" }, // daily 10:00
+  { job: "marketplace-subscription-renewal-sweep", cronExpression: "30 2 * * *" }, // daily 02:30 — right after the platform renewal-sweep
 ];
 
 /**

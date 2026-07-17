@@ -22,11 +22,27 @@ export interface CreateCheckoutSessionInput {
   organizationId: string;
   billingAccountId: string;
   gatewayCustomerId: string | null;
-  gatewayPriceId: string;
   customerEmail: string;
   successUrl: string;
   cancelUrl: string;
   trialDays: number;
+  /**
+   * "subscription" (default, unchanged behavior) uses `gatewayPriceId` — a
+   * real, pre-configured recurring price/plan/variant id on the gateway's
+   * own dashboard, same as every existing Plan.gatewayPriceIds checkout.
+   * "payment" (Phase 19: paid marketplace listings) is a one-time,
+   * arbitrary-amount charge using `amountCents`/`currency`/`lineItemName`
+   * instead — no pre-configured price object required. Every gateway
+   * documents which modes it genuinely supports; one that can't do
+   * "payment" throws a real, honest error rather than silently degrading.
+   */
+  mode: "subscription" | "payment";
+  gatewayPriceId?: string;
+  amountCents?: number;
+  currency?: string;
+  lineItemName?: string;
+  /** Passed through to the gateway's own metadata/notes/custom_data field and echoed back on the matching webhook event — never fabricated if a gateway can't carry it. */
+  metadata?: Record<string, string>;
 }
 
 export interface CheckoutSessionResult {
@@ -71,6 +87,8 @@ export interface NormalizedWebhookEvent {
   currency?: string;
   failureReason?: string;
   subscriptionSnapshot?: GatewaySubscriptionSnapshot;
+  /** Real passthrough metadata from CreateCheckoutSessionInput.metadata, when the gateway's event object actually carries it — undefined (never guessed) otherwise. */
+  metadata?: Record<string, string>;
   raw: unknown;
 }
 

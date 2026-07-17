@@ -186,13 +186,13 @@ export function SearchPanel({
                   })}
                 </div>
 
-                <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                <label htmlFor="search-date-from" className="flex flex-col gap-1 text-xs text-muted-foreground">
                   From
-                  <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="h-9 w-36 text-xs" />
+                  <Input id="search-date-from" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="h-9 w-36 text-xs" />
                 </label>
-                <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                <label htmlFor="search-date-to" className="flex flex-col gap-1 text-xs text-muted-foreground">
                   To
-                  <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="h-9 w-36 text-xs" />
+                  <Input id="search-date-to" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="h-9 w-36 text-xs" />
                 </label>
                 <label className="flex flex-col gap-1 text-xs text-muted-foreground">
                   Author

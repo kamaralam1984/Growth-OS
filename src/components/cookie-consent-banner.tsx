@@ -23,6 +23,7 @@ import {
   serializeCookieConsent,
   type CookieConsentPreferences,
 } from "@/lib/cookie-consent";
+import { persistConsentDecisionAction } from "@/app/actions/consent-actions";
 
 /**
  * Real cookie consent banner — GDPR/ePrivacy (and CCPA/DPDP-India)
@@ -75,6 +76,11 @@ export function CookieConsentBanner() {
       .join("; ");
     setCustomizeOpen(false);
     forceRerender((n) => n + 1);
+    // Fire-and-forget: the cookie itself is the real, immediate consent
+    // record regardless of auth state. This just additionally persists a
+    // durable, queryable copy for signed-in users (no-ops silently for
+    // anonymous visitors) — never blocks the UI on it.
+    persistConsentDecisionAction(preferences).catch(() => {});
   }
 
   function handleAcceptAll() {

@@ -86,7 +86,7 @@ export function DashboardSwitcher({
     });
   }
 
-  function handleDelete(dashboardId: string, e: React.MouseEvent) {
+  function handleDelete(dashboardId: string, e: React.SyntheticEvent) {
     e.stopPropagation();
     if (dashboards.length <= 1) return;
     if (!confirm("Delete this dashboard?")) return;
@@ -96,13 +96,20 @@ export function DashboardSwitcher({
     });
   }
 
-  function handleDeleteTemplate(templateId: string, e: React.MouseEvent) {
+  function handleDeleteTemplate(templateId: string, e: React.SyntheticEvent) {
     e.stopPropagation();
     if (!confirm("Delete this saved template?")) return;
     startTransition(async () => {
       await deleteDashboardTemplateAction(templateId);
       router.refresh();
     });
+  }
+
+  function handleDeleteKeyDown(e: React.KeyboardEvent, run: (e: React.SyntheticEvent) => void) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      run(e);
+    }
   }
 
   function handleSaveTemplate(e: React.FormEvent) {
@@ -130,6 +137,7 @@ export function DashboardSwitcher({
           </DialogHeader>
           <form onSubmit={handleSaveTemplate} className="flex flex-col gap-4">
             <Input
+              // eslint-disable-next-line jsx-a11y/no-autofocus -- this Dialog only just opened via direct user action; focusing its first field matches the WAI-ARIA APG dialog pattern, not the page-load focus-theft this rule guards against.
               autoFocus
               placeholder="Template name"
               value={saveName}
@@ -203,7 +211,9 @@ export function DashboardSwitcher({
                     <span
                       role="button"
                       tabIndex={0}
+                      aria-label={`Delete dashboard "${dashboard.name}"`}
                       onClick={(e) => handleDelete(dashboard.id, e)}
+                      onKeyDown={(e) => handleDeleteKeyDown(e, (evt) => handleDelete(dashboard.id, evt))}
                       className="rounded-md p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                     >
                       <Trash2 className="size-3.5" />
@@ -224,6 +234,7 @@ export function DashboardSwitcher({
                 ) : (
                   <form onSubmit={handleCreate} className="flex flex-col gap-2 p-2">
                     <Input
+                      // eslint-disable-next-line jsx-a11y/no-autofocus -- this field was just revealed by clicking "New dashboard"; focusing it matches expected UX, not page-load focus-theft.
                       autoFocus
                       placeholder="Dashboard name"
                       value={name}
@@ -266,14 +277,14 @@ export function DashboardSwitcher({
                       className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground"
                     >
                       <span className="truncate">{t.name}</span>
-                      <span
-                        role="button"
-                        tabIndex={0}
+                      <button
+                        type="button"
+                        aria-label={`Delete template "${t.name}"`}
                         onClick={(e) => handleDeleteTemplate(t.id, e)}
                         className="rounded-md p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                       >
                         <Trash2 className="size-3.5" />
-                      </span>
+                      </button>
                     </div>
                   ))}
                 </div>

@@ -30,7 +30,20 @@ import type { BillingIntervalUnit, PlanTier } from "@/generated/prisma/client";
  * Storage/knowledge-base limits are stored in MB (matching Plan.storageMbLimit
  * / Plan.knowledgeBaseMbLimit) — GB/TB figures in the tier docs below are
  * converted with 1 GB = 1024 MB, 1 TB = 1024 * 1024 MB.
+ *
+ * MULTI-CURRENCY (Phase 20, "Light"): Plan already had a real
+ * `@@unique([tier, interval, currency])` constraint from day one — the gap
+ * was purely that this catalog only ever seeded USD rows. Each paid tier
+ * below now carries one real, deliberately-set list price per
+ * SUPPORTED_CURRENCY (admin-configured round numbers, never a live FX
+ * conversion of the USD price) so an org is billed in ITS OWN currency
+ * (Organization.currency) rather than always USD. There is still no live
+ * exchange-rate conversion anywhere — see src/lib/billing/fx.ts's absence;
+ * that's an explicit, documented non-goal of "Light" multi-currency.
  */
+
+export const SUPPORTED_PLAN_CURRENCIES = ["USD", "EUR", "GBP", "INR", "AED", "SAR", "CAD", "AUD", "SGD", "JPY"] as const;
+export type SupportedPlanCurrency = (typeof SUPPORTED_PLAN_CURRENCIES)[number];
 
 interface PlanFeatureSeed {
   key: string;
@@ -42,10 +55,10 @@ interface PlanTierSeed {
   name: string;
   description: string;
   isCustom: boolean;
-  /** cents; null tier (CUSTOM) is negotiated manually and never charged via a real checkout. */
-  monthlyPriceCents: number;
-  /** null = no YEARLY SKU seeded for this tier (FREE, CUSTOM). */
-  yearlyPriceCents: number | null;
+  /** cents, keyed by currency — real, admin-set list prices, one per SUPPORTED_PLAN_CURRENCY. CUSTOM is negotiated manually and never charged via a real checkout, so every currency is 0. */
+  monthlyPriceCentsByCurrency: Record<SupportedPlanCurrency, number>;
+  /** false = no YEARLY SKU seeded for this tier (FREE, CUSTOM); true = seed YEARLY at exactly 10x the monthly price in every currency (the "2 months free" convention). */
+  hasYearlySku: boolean;
   trialDays: number;
   userLimit: number | null;
   workspaceLimit: number | null;
@@ -67,14 +80,24 @@ interface PlanTierSeed {
 const GB = 1024;
 const TB = 1024 * 1024;
 
+/** Every SUPPORTED_PLAN_CURRENCY set to the same cents value — used for FREE/CUSTOM, which are 0 regardless of currency. */
+function zeroInEveryCurrency(): Record<SupportedPlanCurrency, number> {
+  return Object.fromEntries(SUPPORTED_PLAN_CURRENCIES.map((c) => [c, 0])) as Record<SupportedPlanCurrency, number>;
+}
+
+/** Explicit per-currency monthly list price, in the given order (matches SUPPORTED_PLAN_CURRENCIES) — real, admin-set numbers, never an FX formula. */
+function prices(usd: number, eur: number, gbp: number, inr: number, aed: number, sar: number, cad: number, aud: number, sgd: number, jpy: number): Record<SupportedPlanCurrency, number> {
+  return { USD: usd, EUR: eur, GBP: gbp, INR: inr, AED: aed, SAR: sar, CAD: cad, AUD: aud, SGD: sgd, JPY: jpy };
+}
+
 const PLAN_TIERS: PlanTierSeed[] = [
   {
     tier: "FREE",
     name: "Free",
     description: "For a solo operator or a very small team trying GrowthOS out — real limits, no card required.",
     isCustom: false,
-    monthlyPriceCents: 0,
-    yearlyPriceCents: null,
+    monthlyPriceCentsByCurrency: zeroInEveryCurrency(),
+    hasYearlySku: false,
     trialDays: 0,
     userLimit: 3,
     workspaceLimit: 1,
@@ -101,8 +124,9 @@ const PLAN_TIERS: PlanTierSeed[] = [
     name: "Starter",
     description: "For a growing small business ready to run real client work through GrowthOS.",
     isCustom: false,
-    monthlyPriceCents: 2900,
-    yearlyPriceCents: 29000,
+    // USD  EUR  GBP  INR    AED  SAR  CAD  AUD  SGD  JPY
+    monthlyPriceCentsByCurrency: prices(2900, 2700, 2300, 239900, 10500, 10900, 3900, 4400, 3900, 430000),
+    hasYearlySku: true,
     trialDays: 14,
     userLimit: 10,
     workspaceLimit: 1,
@@ -129,8 +153,9 @@ const PLAN_TIERS: PlanTierSeed[] = [
     name: "Professional",
     description: "For an established agency running multiple workspaces with real reporting needs.",
     isCustom: false,
-    monthlyPriceCents: 9900,
-    yearlyPriceCents: 99000,
+    // USD  EUR   GBP  INR     AED   SAR   CAD   AUD   SGD   JPY
+    monthlyPriceCentsByCurrency: prices(9900, 9200, 7900, 799900, 35900, 36900, 13400, 14900, 13400, 1480000),
+    hasYearlySku: true,
     trialDays: 14,
     userLimit: 25,
     workspaceLimit: 3,
@@ -157,8 +182,9 @@ const PLAN_TIERS: PlanTierSeed[] = [
     name: "Business",
     description: "For a larger agency or reseller that needs white-labeling, a custom domain, and priority support.",
     isCustom: false,
-    monthlyPriceCents: 29900,
-    yearlyPriceCents: 299000,
+    // USD   EUR    GBP   INR      AED    SAR    CAD    AUD    SGD    JPY
+    monthlyPriceCentsByCurrency: prices(29900, 27900, 23900, 2399900, 109900, 111900, 40400, 44900, 40400, 4450000),
+    hasYearlySku: true,
     trialDays: 14,
     userLimit: 100,
     workspaceLimit: 10,
@@ -185,8 +211,9 @@ const PLAN_TIERS: PlanTierSeed[] = [
     name: "Enterprise",
     description: "For a large-scale deployment with unlimited seats/workspaces/projects and every platform feature enabled.",
     isCustom: false,
-    monthlyPriceCents: 99900,
-    yearlyPriceCents: 999000,
+    // USD    EUR    GBP    INR      AED     SAR     CAD     AUD     SGD     JPY
+    monthlyPriceCentsByCurrency: prices(99900, 92900, 79900, 7999900, 366900, 374900, 134900, 149900, 134900, 14850000),
+    hasYearlySku: true,
     trialDays: 0,
     userLimit: null,
     workspaceLimit: null,
@@ -214,8 +241,8 @@ const PLAN_TIERS: PlanTierSeed[] = [
     description:
       "A manually negotiated plan assigned by a platform operator (never self-service-purchased, never charged via a real checkout) — every limit is unlimited and every feature is enabled by default; the operator tailors actual pricing/terms off-platform.",
     isCustom: true,
-    monthlyPriceCents: 0,
-    yearlyPriceCents: null,
+    monthlyPriceCentsByCurrency: zeroInEveryCurrency(),
+    hasYearlySku: false,
     trialDays: 0,
     userLimit: null,
     workspaceLimit: null,
@@ -265,9 +292,10 @@ export interface PlanCatalogEntry {
   features: PlanFeatureSeed[];
 }
 
-const CURRENCY = "USD";
+/** Yearly = exactly 10x the monthly price (the "2 months free" convention) — computed, never a second hand-typed table that could drift from the monthly one. */
+const YEARLY_MULTIPLIER = 10;
 
-function toEntry(tierSeed: PlanTierSeed, interval: BillingIntervalUnit, priceCents: number): PlanCatalogEntry {
+function toEntry(tierSeed: PlanTierSeed, interval: BillingIntervalUnit, currency: SupportedPlanCurrency, priceCents: number): PlanCatalogEntry {
   return {
     tier: tierSeed.tier,
     interval,
@@ -275,7 +303,7 @@ function toEntry(tierSeed: PlanTierSeed, interval: BillingIntervalUnit, priceCen
     description: tierSeed.description,
     isCustom: tierSeed.isCustom,
     priceCents,
-    currency: CURRENCY,
+    currency,
     trialDays: tierSeed.trialDays,
     userLimit: tierSeed.userLimit,
     workspaceLimit: tierSeed.workspaceLimit,
@@ -295,14 +323,17 @@ function toEntry(tierSeed: PlanTierSeed, interval: BillingIntervalUnit, priceCen
   };
 }
 
-/** The full, flattened [tier, interval] catalog — one entry per real Plan row this app seeds. */
-export const PLAN_CATALOG: PlanCatalogEntry[] = PLAN_TIERS.flatMap((tierSeed) => {
-  const entries = [toEntry(tierSeed, "MONTHLY", tierSeed.monthlyPriceCents)];
-  if (tierSeed.yearlyPriceCents !== null) {
-    entries.push(toEntry(tierSeed, "YEARLY", tierSeed.yearlyPriceCents));
-  }
-  return entries;
-});
+/** The full, flattened [tier, interval, currency] catalog — one entry per real Plan row this app seeds. */
+export const PLAN_CATALOG: PlanCatalogEntry[] = PLAN_TIERS.flatMap((tierSeed) =>
+  SUPPORTED_PLAN_CURRENCIES.flatMap((currency) => {
+    const monthlyPriceCents = tierSeed.monthlyPriceCentsByCurrency[currency];
+    const entries = [toEntry(tierSeed, "MONTHLY", currency, monthlyPriceCents)];
+    if (tierSeed.hasYearlySku) {
+      entries.push(toEntry(tierSeed, "YEARLY", currency, monthlyPriceCents * YEARLY_MULTIPLIER));
+    }
+    return entries;
+  }),
+);
 
 /**
  * Idempotent upsert-by-[tier, interval, currency] — safe to call on every

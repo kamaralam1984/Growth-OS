@@ -19,6 +19,13 @@ import {
   Server,
   PackageCheck,
   Loader2,
+  Users,
+  LifeBuoy,
+  UserSearch,
+  SearchCheck,
+  PieChart,
+  Microscope,
+  HeartHandshake,
   type LucideIcon,
 } from "lucide-react";
 
@@ -52,6 +59,15 @@ const AGENT_ICONS: Record<AgentType, LucideIcon> = {
   QA_DIRECTOR: Bug,
   DEVOPS_DIRECTOR: Server,
   DELIVERY_DIRECTOR: PackageCheck,
+  // Marketplace-installable (Phase 19) — never provisioned by this
+  // onboarding flow, but AgentType is exhaustive here so the map must cover them.
+  HR: Users,
+  SUPPORT: LifeBuoy,
+  RECRUITMENT: UserSearch,
+  SEO: SearchCheck,
+  BUSINESS_ANALYST: PieChart,
+  RESEARCH: Microscope,
+  CUSTOMER_SUCCESS: HeartHandshake,
 };
 
 const cardVariants = {

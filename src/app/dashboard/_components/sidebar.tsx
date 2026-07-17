@@ -27,6 +27,11 @@ import {
   Building,
   Percent,
   Settings,
+  TrendingUp,
+  HeartPulse,
+  Wand2,
+  Briefcase,
+  LifeBuoy,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -38,8 +43,10 @@ const LINKS = [
   { href: "/dashboard/ai-command-center", labelKey: "nav.aiCommandCenter", icon: Sparkles },
   { href: "/board", labelKey: "nav.board", icon: Bot },
   { href: "/dashboard/companies", labelKey: "nav.companies", icon: Building2 },
+  { href: "/dashboard/clients", labelKey: "nav.clients", icon: HeartPulse },
   { href: "/dashboard/lead-finder", labelKey: "nav.leadFinder", icon: UserSearch },
   { href: "/dashboard/client-finder", labelKey: "nav.clientFinder", icon: Handshake },
+  { href: "/dashboard/growth-engine", labelKey: "nav.growthEngine", icon: TrendingUp },
   { href: "/dashboard/website-scanner", labelKey: "nav.websiteScanner", icon: Globe },
   { href: "/dashboard/outreach", labelKey: "nav.outreach", icon: Megaphone },
   { href: "/dashboard/crm", labelKey: "nav.crm", icon: Users },
@@ -51,6 +58,9 @@ const LINKS = [
   { href: "/dashboard/analytics", labelKey: "nav.analytics", icon: BarChart3 },
   { href: "/dashboard/alerts", labelKey: "nav.alerts", icon: AlertTriangle },
   { href: "/dashboard/knowledge-base", labelKey: "nav.knowledgeBase", icon: Library },
+  { href: "/dashboard/prompt-library", labelKey: "nav.promptLibrary", icon: Wand2 },
+  { href: "/dashboard/hr", labelKey: "nav.hr", icon: Briefcase },
+  { href: "/dashboard/support", labelKey: "nav.support", icon: LifeBuoy },
   { href: "/dashboard/search", labelKey: "nav.search", icon: Search },
   { href: "/board/reports", labelKey: "nav.reports", icon: FileBarChart },
   { href: "/dashboard/billing", labelKey: "nav.billing", icon: CreditCard },

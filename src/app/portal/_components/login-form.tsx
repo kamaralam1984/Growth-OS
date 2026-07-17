@@ -7,9 +7,10 @@ import { Mail, Lock, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import type { EffectiveBranding } from "@/lib/white-label/resolve-brand";
 import { requestMagicLink, loginWithPassword } from "../_lib/actions";
 
-export function PortalLoginForm({ callbackUrl }: { callbackUrl?: string }) {
+export function PortalLoginForm({ callbackUrl, branding }: { callbackUrl?: string; branding: EffectiveBranding }) {
   const router = useRouter();
   const [mode, setMode] = useState<"magic" | "password">("magic");
   const [email, setEmail] = useState("");
@@ -59,11 +60,20 @@ export function PortalLoginForm({ callbackUrl }: { callbackUrl?: string }) {
     );
   }
 
+  // Default title/copy is exactly what it was before white-labeling was
+  // wired into this page — only swapped when this request actually matched
+  // a verified custom domain for an org that's entitled to white-labeling.
+  const title = branding.isWhiteLabeled ? `${branding.brandName} Portal` : "Client Portal";
+  const magicDescription =
+    branding.isWhiteLabeled && branding.customLoginHeadline
+      ? branding.customLoginHeadline
+      : "We'll email you a real, secure sign-in link — no password needed.";
+
   return (
     <Card glass className="w-full max-w-md">
       <CardHeader>
-        <CardTitle>Client Portal</CardTitle>
-        <CardDescription>{mode === "magic" ? "We'll email you a real, secure sign-in link — no password needed." : "Sign in with your email and password."}</CardDescription>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>{mode === "magic" ? magicDescription : "Sign in with your email and password."}</CardDescription>
       </CardHeader>
       <CardContent>
         {mode === "magic" ? (

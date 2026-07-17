@@ -34,6 +34,7 @@ const LOCALE_OPTIONS = [
   { value: "ur", label: "اردو" },
   { value: "zh", label: "中文" },
   { value: "ja", label: "日本語" },
+  { value: "ko", label: "한국어" },
 ] as const;
 
 export interface PreferencesFormProps {

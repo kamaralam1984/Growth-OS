@@ -107,3 +107,76 @@ export async function startSystemTriggeredExecutiveMeeting(
 
   return { meetingId: meeting.id };
 }
+
+const ROUNDS_PER_DNA_MEETING = 3;
+
+/**
+ * Sibling of startSystemTriggeredExecutiveMeeting, for the AI Company
+ * Understanding Engine (src/lib/company-discovery/pipeline.ts) — same
+ * mechanics (LIVE meeting, real executive-agent participants, runMeetingRound
+ * / generateMeetingSummary unchanged), but the agenda is seeded from the
+ * freshly-generated Company DNA's business understanding instead of a fixed
+ * "yesterday's progress" string, and there's no "already ran today" guard
+ * (this runs at most once per discovery run, never on a cron). Called
+ * automatically as part of the discovery pipeline, BEFORE the owner reviews
+ * the DNA — per the approved pipeline order, the meeting's strategic output
+ * is itself part of what gets reviewed, not a live config change, so it's
+ * safe to run unattended.
+ */
+export async function startCompanyDNAExecutiveMeeting(params: {
+  organizationId: string;
+  companyName: string;
+  businessSummary: string;
+}): Promise<{ meetingId: string; skippedReason?: never } | { meetingId?: never; skippedReason: string }> {
+  const owner = await prisma.membership.findFirst({
+    where: { organizationId: params.organizationId, status: "ACTIVE", role: "OWNER" },
+    orderBy: { createdAt: "asc" },
+    select: { userId: true },
+  });
+  if (!owner) return { skippedReason: "no active OWNER membership" };
+
+  const agents = await prisma.aIAgentInstance.findMany({
+    where: { organizationId: params.organizationId, active: true, type: { in: EXECUTIVE_AGENT_TYPES } },
+    select: { id: true },
+  });
+  if (agents.length === 0) return { skippedReason: "no active executive agents" };
+
+  if (!isAIConnected()) return { skippedReason: "ANTHROPIC_API_KEY not configured" };
+
+  const userId = owner.userId;
+  const title = `Company DNA Review — ${params.companyName}`;
+  const agenda = `The AI Company Understanding Engine finished analyzing ${params.companyName}. Business summary: ${params.businessSummary}. Each executive should review this profile from their own role's perspective and recommend strategy, priorities, and risks.`;
+
+  const meeting = await prisma.meeting.create({
+    data: {
+      organizationId: params.organizationId,
+      title,
+      agenda,
+      status: "LIVE",
+      startedAt: new Date(),
+      createdById: userId,
+      participants: { create: [...agents.map((agent) => ({ agentId: agent.id })), { userId }] },
+    },
+  });
+
+  await logActivity({
+    organizationId: params.organizationId,
+    type: "MEETING",
+    description: `Meeting "${meeting.title}" started automatically by the AI Company Understanding Engine.`,
+    actorUserId: userId,
+    metadata: { meetingId: meeting.id, triggeredBy: "company-discovery" },
+  });
+  await logAudit({
+    userId,
+    organizationId: params.organizationId,
+    action: "board.meeting_created",
+    metadata: { meetingId: meeting.id, triggeredBy: "company-discovery" },
+  });
+
+  for (let round = 0; round < ROUNDS_PER_DNA_MEETING; round += 1) {
+    await runMeetingRound(meeting.id);
+  }
+  await generateMeetingSummary(meeting.id);
+
+  return { meetingId: meeting.id };
+}

@@ -13,32 +13,43 @@ import { Container } from "@/components/ui/container";
 import { AnnouncementBar } from "@/components/ui/announcement-bar";
 import { Logo } from "@/components/brand/logo";
 
+/* Absolute hrefs ("/#id" / "/product#id" not bare "#id"): this Navbar renders
+   on both "/" and "/product" (see src/app/product/page.tsx), and a bare
+   "#id" only resolves against whichever page is currently loaded — the
+   absolute form always navigates to the right page's section regardless of
+   where the user is. Pricing, Security, and FAQ live on /product now, not
+   on the homepage (see src/app/product/page.tsx). */
 const PRODUCT_LINKS = [
   {
     label: "AI Agents",
-    href: "#ai-agents",
+    href: "/#ai-agents",
     description: "Meet the five agents running your pipeline.",
   },
   {
     label: "How it works",
-    href: "#how-it-works",
+    href: "/#how-it-works",
     description: "From first touch to closed-won, step by step.",
   },
   {
+    label: "Product tour",
+    href: "/product",
+    description: "The full walkthrough — dashboard, the shift to autonomous, every capability.",
+  },
+  {
     label: "Pricing",
-    href: "#pricing",
+    href: "/product#pricing",
     description: "Simple, transparent plans for every stage.",
   },
   {
     label: "Security",
-    href: "#security",
+    href: "/product#security",
     description: "How we protect your workspace and data.",
   },
 ] as const;
 
 const NAV_LINKS = [
-  { label: "Security", href: "#security" },
-  { label: "FAQ", href: "#faq" },
+  { label: "Security", href: "/product#security" },
+  { label: "FAQ", href: "/product#faq" },
 ] as const;
 
 function ThemeToggle() {
@@ -187,7 +198,7 @@ function Navbar() {
       <AnnouncementBar
         message="KVL GrowthOS is now live — automate your first pipeline in 15 minutes."
         ctaLabel="Get started"
-        ctaHref="#cta"
+        ctaHref="/#cta"
       />
 
       <header
@@ -198,9 +209,9 @@ function Navbar() {
       >
         <Container>
           <nav className="flex h-16 items-center justify-between">
-            <a href="#top" className="flex items-center text-lg font-semibold">
+            <Link href="/" className="flex items-center text-lg font-semibold">
               <Logo />
-            </a>
+            </Link>
 
             <div className="hidden items-center gap-8 md:flex">
               <ProductMenu />

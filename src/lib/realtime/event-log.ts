@@ -29,7 +29,13 @@ export async function listRecentEvents(
   });
 }
 
-const REALTIME_EVENT_KINDS = new Set<RealtimeEvent["kind"]>(["notification", "activity", "agent_status", "comment"]);
+const REALTIME_EVENT_KINDS = new Set<RealtimeEvent["kind"]>([
+  "notification",
+  "activity",
+  "agent_status",
+  "comment",
+  "company_discovery_progress",
+]);
 
 function isReplayablePayload(payload: unknown): payload is Omit<RealtimeEvent, "at"> {
   if (!payload || typeof payload !== "object") return false;

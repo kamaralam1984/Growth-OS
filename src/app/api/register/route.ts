@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { registerSchema } from "@/lib/validations/auth";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { checkRateLimitDegradable } from "@/lib/security/rate-limit-distributed";
 import { sendVerificationEmail } from "@/lib/auth/verification-actions";
 import { hashPassword } from "@/lib/auth/password";
 import { clientIpFromHeaders } from "@/lib/security/client-ip";
@@ -15,7 +15,7 @@ export async function POST(request: Request) {
   // Registration is a public, unauthenticated, DB-mutating endpoint — guard
   // it against abuse with a simple per-IP sliding window before doing any
   // real work.
-  const rate = checkRateLimit(`register:${clientIp(request)}`, { limit: 10, windowMs: 15 * 60_000 });
+  const rate = await checkRateLimitDegradable(`register:${clientIp(request)}`, { limit: 10, windowMs: 15 * 60_000 });
   if (!rate.allowed) {
     return NextResponse.json(
       { error: "Too many registration attempts. Please try again in a few minutes." },

@@ -1,3 +1,6 @@
+import Link from "next/link";
+import { ArrowRight } from "lucide-react";
+
 import { Container } from "@/components/ui/container";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -57,14 +60,30 @@ export default async function AdminCompliancePage() {
 
   return (
     <Container className="flex flex-col gap-6 py-8">
-      <div>
-        <h1 className="text-2xl font-semibold text-foreground">Compliance Readiness</h1>
-        <p className="max-w-3xl text-sm text-muted-foreground">
-          A real, honest architectural-readiness snapshot per framework — never a fabricated certification. Every
-          control below is either checked live against this codebase (a database round-trip, a live crypto/TOTP/rate-
-          limiter test, a source-file scan) or explicitly marked as an operational/manual control that no code can
-          verify. A real SOC2/ISO27001 certification or PCI DSS attestation still requires a third-party auditor.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-foreground">Compliance Readiness</h1>
+          <p className="max-w-3xl text-sm text-muted-foreground">
+            A real, honest architectural-readiness snapshot per framework — never a fabricated certification. Every
+            control below is either checked live against this codebase (a database round-trip, a live crypto/TOTP/rate-
+            limiter test, a source-file scan) or explicitly marked as an operational/manual control that no code can
+            verify. A real SOC2/ISO27001 certification or PCI DSS attestation still requires a third-party auditor.
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-x-4 gap-y-1.5">
+          {[
+            { href: "/admin/compliance/risks", label: "Security Risk Register" },
+            { href: "/admin/compliance/policies", label: "Policy Center" },
+            { href: "/admin/compliance/vendors", label: "Vendor Register" },
+            { href: "/admin/compliance/assets", label: "Asset Inventory" },
+            { href: "/admin/compliance/soa", label: "Statement of Applicability" },
+            { href: "/admin/compliance/changes", label: "Change Management" },
+          ].map((link) => (
+            <Link key={link.href} href={link.href} className="flex items-center gap-1.5 text-sm font-medium text-primary hover:underline">
+              {link.label} <ArrowRight className="size-3.5" />
+            </Link>
+          ))}
+        </div>
       </div>
 
       <div className="grid gap-6">

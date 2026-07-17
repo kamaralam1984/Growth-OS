@@ -4,7 +4,7 @@ import { requireActiveMembership } from "../../_lib/require-membership";
 import { listRecentEvents } from "@/lib/realtime/event-log";
 import { EventLogList, type EventLogRow } from "./_components/event-log-list";
 
-const EVENT_TYPES = ["notification", "activity", "agent_status", "comment"];
+const EVENT_TYPES = ["notification", "activity", "agent_status", "comment", "company_discovery_progress"];
 const PRIVILEGED_ROLES = new Set(["OWNER", "ADMIN"]);
 
 export default async function EventsPage() {

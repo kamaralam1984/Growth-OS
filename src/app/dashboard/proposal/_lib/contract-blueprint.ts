@@ -6,6 +6,7 @@ export interface ContractBlueprintInput {
   content: string;
   organizationName: string;
   logoUrl?: string | null;
+  footerText?: string | null;
   gstNumber?: string | null;
   registrationNumber?: string | null;
   clientName: string;
@@ -30,7 +31,7 @@ export function buildContractBlueprint(input: ContractBlueprintInput): DocumentB
     tableOfContents: false,
     sections: [{ heading: "Agreement Terms", body: input.content }],
     signatureBlock: { parties: [{ role: input.clientName }, { role: input.organizationName }] },
-    footerText: input.organizationName,
+    footerText: input.footerText ?? input.organizationName,
     generatedAt: input.createdAt,
   };
 }

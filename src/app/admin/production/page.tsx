@@ -11,6 +11,8 @@ import { listActiveSystemAlerts } from "@/lib/monitoring/alerts";
 import { listRecentBackups } from "@/lib/ops/backup";
 import { listRecentRestores } from "@/lib/ops/restore-test";
 import { getLastSuccessfulDeployment, listRecentDeployments } from "@/lib/ops/deployment";
+import { listEmergencyContacts } from "@/lib/ops/emergency-contacts";
+import { EmergencyContactsPanel } from "./_components/emergency-contacts-panel";
 import type { ComponentHealth } from "@/lib/monitoring/health";
 import type { DeploymentEnvironment, HealthStatus, SystemComponent } from "@/generated/prisma/client";
 
@@ -114,7 +116,7 @@ function UptimeStrip({ snapshots }: { snapshots: { status: HealthStatus; created
 export default async function ProductionDashboardPage() {
   await requirePlatformOwner("/admin/production");
 
-  const [live, alerts, recentSnapshotRows, securityEvents, deployments, backups, restores, lastGoodByEnvironment] = await Promise.all([
+  const [live, alerts, recentSnapshotRows, securityEvents, deployments, backups, restores, lastGoodByEnvironment, emergencyContacts] = await Promise.all([
     runFullSystemCheck(),
     listActiveSystemAlerts(50),
     prisma.systemHealthSnapshot.findMany({ orderBy: { createdAt: "desc" }, take: 400 }),
@@ -123,6 +125,7 @@ export default async function ProductionDashboardPage() {
     listRecentBackups(10),
     listRecentRestores(10),
     Promise.all(DEPLOYMENT_ENVIRONMENTS.map((environment) => getLastSuccessfulDeployment(environment))),
+    listEmergencyContacts(),
   ]);
 
   const liveByComponent = new Map<SystemComponent, ComponentHealth>(live.components.map((c) => [c.component, c]));
@@ -359,8 +362,9 @@ export default async function ProductionDashboardPage() {
             <CardHeader>
               <CardTitle className="text-base">Recent backups</CardTitle>
               <CardDescription>
-                Real <code className="text-xs">Backup</code> rows written by <code className="text-xs">npm run backup:database</code> /{" "}
-                <code className="text-xs">backup:storage</code> — see docs/operations/disaster-recovery.md.
+                Real <code className="text-xs">Backup</code> rows — written nightly (database, 2am) and weekly (storage, Sunday
+                2:30am) by the scheduler, or on demand via <code className="text-xs">npm run backup:database</code> /{" "}
+                <code className="text-xs">backup:storage</code>. See docs/operations/disaster-recovery.md.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -399,8 +403,9 @@ export default async function ProductionDashboardPage() {
             <CardHeader>
               <CardTitle className="text-base">Recent restore tests</CardTitle>
               <CardDescription>
-                Real <code className="text-xs">Restore</code> rows written by <code className="text-xs">npm run restore:test</code>{" "}
-                against a genuinely separate scratch database — never production.
+                Real <code className="text-xs">Restore</code> rows — written weekly (Sunday 3am, against that morning&apos;s
+                database backup) by the scheduler, or on demand via <code className="text-xs">npm run restore:test</code>, against
+                a genuinely separate scratch database — never production.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -435,6 +440,11 @@ export default async function ProductionDashboardPage() {
             </CardContent>
           </Card>
         </div>
+      </div>
+
+      {/* Emergency Contacts (Business Continuity) */}
+      <div className="mt-8">
+        <EmergencyContactsPanel contacts={emergencyContacts} />
       </div>
     </Container>
   );

@@ -11,8 +11,13 @@ import {
   evaluateLatePayment,
   evaluateProjectDelay,
   evaluateSecurityRisk,
+  evaluateRevenueConcentration,
+  evaluateResourceShortage,
+  evaluateLateLeaveApproval,
+  evaluateSupportSlaBreach,
   type AlertRuleResult,
 } from "./rules";
+import { generateMitigationSuggestions } from "./mitigation";
 import type { AlertType } from "@/generated/prisma/client";
 
 const RULES: Record<AlertType, (organizationId: string) => Promise<AlertRuleResult[]>> = {
@@ -25,6 +30,10 @@ const RULES: Record<AlertType, (organizationId: string) => Promise<AlertRuleResu
   LATE_PAYMENT: evaluateLatePayment,
   PROJECT_DELAY: evaluateProjectDelay,
   SECURITY_RISK: evaluateSecurityRisk,
+  REVENUE_CONCENTRATION: evaluateRevenueConcentration,
+  RESOURCE_SHORTAGE: evaluateResourceShortage,
+  LATE_LEAVE_APPROVAL: evaluateLateLeaveApproval,
+  SUPPORT_SLA_BREACH: evaluateSupportSlaBreach,
 };
 
 /**
@@ -74,6 +83,11 @@ export async function evaluateAlerts(organizationId: string): Promise<void> {
         continue;
       }
 
+      // Only generated on the create-new/reactivate branches below (never
+      // on the "still ACTIVE" refresh above) to bound AI spend — an
+      // enrichment on top of the deterministic alert, never blocking it.
+      const mitigationSuggestions = await generateMitigationSuggestions(organizationId, result);
+
       if (existing) {
         await prisma.alert.update({
           where: { id: existing.id },
@@ -85,6 +99,7 @@ export async function evaluateAlerts(organizationId: string): Promise<void> {
             metricValue: result.metricValue,
             thresholdValue: result.thresholdValue,
             formula: result.formula,
+            mitigationSuggestions,
             triggeredAt: new Date(),
             acknowledgedAt: null,
             acknowledgedByUserId: null,
@@ -105,6 +120,7 @@ export async function evaluateAlerts(organizationId: string): Promise<void> {
             metricValue: result.metricValue,
             thresholdValue: result.thresholdValue,
             formula: result.formula,
+            mitigationSuggestions,
           },
         });
       }

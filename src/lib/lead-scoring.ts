@@ -35,7 +35,27 @@ export interface LeadScoreComputation {
   band: LeadScoreBand;
 }
 
-export async function computeLeadScore(companyId: string): Promise<LeadScoreComputation> {
+/**
+ * Optional per-org override of the 9 factors' relative weights (Phase 17 —
+ * "Allow organizations to customize scoring"). Values are relative, not
+ * required to sum to 100 — normalized internally. Any factor omitted from a
+ * partial override falls back to weight 1 (the plain-average behavior for
+ * that factor). Passing `undefined`/`null` reproduces today's exact plain
+ * average — zero behavior change for every org that never touches this.
+ */
+export type LeadScoringWeights = Partial<{
+  industryMatchScore: number;
+  companySizeScore: number;
+  growthScore: number;
+  technologyFitScore: number;
+  opportunitySizeScore: number;
+  budgetPotentialScore: number;
+  locationScore: number;
+  digitalMaturityScore: number;
+  automationNeedScore: number;
+}>;
+
+export async function computeLeadScore(companyId: string, weights?: LeadScoringWeights | null): Promise<LeadScoreComputation> {
   const company = await prisma.company.findUniqueOrThrow({
     where: { id: companyId },
     include: {
@@ -126,18 +146,20 @@ export async function computeLeadScore(companyId: string): Promise<LeadScoreComp
     ? clamp(30 + (latestIntel.potentialPainPoints.length + latestIntel.estimatedSoftwareNeeds.length) * 12)
     : NEUTRAL;
 
-  const scores = [
-    industryMatchScore,
-    companySizeScore,
-    growthScore,
-    technologyFitScore,
-    opportunitySizeScore,
-    budgetPotentialScore,
-    locationScore,
-    digitalMaturityScore,
-    automationNeedScore,
+  const factors: Array<[keyof LeadScoringWeights, number]> = [
+    ["industryMatchScore", industryMatchScore],
+    ["companySizeScore", companySizeScore],
+    ["growthScore", growthScore],
+    ["technologyFitScore", technologyFitScore],
+    ["opportunitySizeScore", opportunitySizeScore],
+    ["budgetPotentialScore", budgetPotentialScore],
+    ["locationScore", locationScore],
+    ["digitalMaturityScore", digitalMaturityScore],
+    ["automationNeedScore", automationNeedScore],
   ];
-  const overallScore = clamp(scores.reduce((sum, s) => sum + s, 0) / scores.length);
+  const weightedSum = factors.reduce((sum, [key, score]) => sum + score * (weights?.[key] ?? 1), 0);
+  const totalWeight = factors.reduce((sum, [key]) => sum + (weights?.[key] ?? 1), 0);
+  const overallScore = clamp(totalWeight > 0 ? weightedSum / totalWeight : weightedSum / factors.length);
   const band: LeadScoreBand = overallScore >= 70 ? "HOT" : overallScore >= 40 ? "WARM" : "COLD";
 
   return {
@@ -158,7 +180,13 @@ export async function computeLeadScore(companyId: string): Promise<LeadScoreComp
 /** Computes and upserts the LeadScore row. Never throws — scoring must never break the action that triggered it. */
 export async function scoreCompany(companyId: string): Promise<void> {
   try {
-    const score = await computeLeadScore(companyId);
+    const company = await prisma.company.findUnique({ where: { id: companyId }, select: { organizationId: true } });
+    const config = company
+      ? await prisma.leadDiscoveryConfig.findUnique({ where: { organizationId: company.organizationId }, select: { scoringWeights: true } })
+      : null;
+    const weights = (config?.scoringWeights as LeadScoringWeights | null) ?? null;
+
+    const score = await computeLeadScore(companyId, weights);
     await prisma.leadScore.upsert({
       where: { companyId },
       create: { companyId, ...score, scoredAt: new Date() },

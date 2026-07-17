@@ -11,7 +11,8 @@ export function ScoreRing({ value, label }: { value: number; label: string }) {
   return (
     <div className="flex flex-col items-center gap-3">
       <div className="relative" style={{ width: SIZE, height: SIZE }}>
-        <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} className="-rotate-90">
+        {/* Decorative progress ring — the score and label are already exposed as real text below, so this SVG is hidden from assistive tech to avoid a duplicate announcement. */}
+        <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} className="-rotate-90" aria-hidden="true">
           <circle cx={SIZE / 2} cy={SIZE / 2} r={RADIUS} fill="none" strokeWidth={STROKE} className="stroke-muted" />
           <circle
             cx={SIZE / 2}

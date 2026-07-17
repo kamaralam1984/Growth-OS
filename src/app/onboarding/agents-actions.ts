@@ -5,6 +5,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
+import { enqueueCompanyDiscoveryRun } from "@/lib/company-discovery/discovery-queue";
 import { AgentType, Prisma } from "@/generated/prisma/client";
 
 const organizationIdSchema = z.string().trim().min(1, "An organization is required.");
@@ -110,6 +111,28 @@ export async function getUserOrganizationId(): Promise<string | null> {
 }
 
 /**
+ * Enqueues one AI Company Understanding Engine run (src/lib/company-discovery/
+ * pipeline.ts) for a freshly-onboarded organization, if it gave a website —
+ * never blocks or fails onboarding itself (best-effort, same discipline as
+ * logActivity/sendEmail elsewhere). Idempotent across repeated
+ * completeOnboarding calls (e.g. a page refresh): a CompanyDiscoveryRun
+ * already existing for this org — from this same onboarding, or a later
+ * manual "Re-analyze" — means this is skipped rather than double-enqueued.
+ */
+async function maybeStartCompanyDiscovery(organizationId: string, website: string | null): Promise<void> {
+  if (!website) return;
+  try {
+    const existing = await prisma.companyDiscoveryRun.findFirst({ where: { organizationId }, select: { id: true } });
+    if (existing) return;
+
+    const run = await prisma.companyDiscoveryRun.create({ data: { organizationId, status: "PENDING" } });
+    await enqueueCompanyDiscoveryRun(run.id);
+  } catch (error) {
+    console.error("[onboarding] failed to start company discovery:", error);
+  }
+}
+
+/**
  * Idempotently provisions the default workspace for an organization:
  * Workspace + KnowledgeBase + 6 PipelineStages + 10 DealStages + 7
  * AIAgentInstance rows, and marks the current user's onboarding as
@@ -166,6 +189,8 @@ export async function completeOnboarding(organizationId: string): Promise<AgentI
         data: { onboardingCompletedAt: new Date() },
       });
     }
+
+    await maybeStartCompanyDiscovery(parsedOrgId.data, organization.website);
 
     const byType = new Map(organization.aiAgents.map((agent) => [agent.type, agent]));
     return AGENT_DEFINITIONS.map((def) => {
@@ -224,6 +249,8 @@ export async function completeOnboarding(organizationId: string): Promise<AgentI
     action: "onboarding.completed",
     metadata: { agentsCreated: missingAgentDefinitions.map((a) => a.type), workspaceCreated: !organization.workspace },
   });
+
+  await maybeStartCompanyDiscovery(parsedOrgId.data, organization.website);
 
   const byType = new Map(organization.aiAgents.map((agent) => [agent.type, agent]));
   return AGENT_DEFINITIONS.map((def) => {

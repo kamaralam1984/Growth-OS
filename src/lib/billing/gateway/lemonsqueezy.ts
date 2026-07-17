@@ -67,6 +67,17 @@ export const lemonsqueezyGateway: PlatformGateway = {
   isConfigured,
 
   async createCheckoutSession(input: CreateCheckoutSessionInput): Promise<CheckoutSessionResult> {
+    // LemonSqueezy checkouts are always tied to a pre-created Product
+    // Variant — there is no documented endpoint for an arbitrary,
+    // dynamically-priced one-time charge the way Stripe/Razorpay/Paddle
+    // support above. Honestly rejecting rather than faking a checkout
+    // session for an unsupported flow, same discipline as this file's own
+    // createRefund().
+    if (input.mode === "payment") {
+      throw new Error("LemonSqueezy does not support one-time checkout for an arbitrary amount — this listing's purchase will use another configured gateway or Manual/Bank Transfer.");
+    }
+    if (!input.gatewayPriceId) throw new Error("LemonSqueezy subscription checkout requires gatewayPriceId.");
+
     const response = await fetch(`${API_BASE}/checkouts`, {
       method: "POST",
       headers: headers(),
@@ -74,7 +85,7 @@ export const lemonsqueezyGateway: PlatformGateway = {
         data: {
           type: "checkouts",
           attributes: {
-            checkout_data: { email: input.customerEmail, custom: { organizationId: input.organizationId, billingAccountId: input.billingAccountId } },
+            checkout_data: { email: input.customerEmail, custom: { organizationId: input.organizationId, billingAccountId: input.billingAccountId, ...input.metadata } },
             product_options: { redirect_url: input.successUrl },
           },
           relationships: {

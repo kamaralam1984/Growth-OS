@@ -1,0 +1,32 @@
+# Real CPU/memory-based autoscaling — requires the metrics-server add-on
+# on the cluster (standard on most managed Kubernetes offerings; may need
+# manual install on a self-managed cluster). Scales the same Deployment
+# real load-test results (see /admin/performance,
+# src/lib/ops/load-test.ts) should inform the min/max replica bounds for —
+# these starting values (2-10, 70% CPU target) are a reasonable default,
+# not derived from a specific measured ceiling.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: kvl-growthos
+  namespace: kvl-growthos
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: kvl-growthos
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80

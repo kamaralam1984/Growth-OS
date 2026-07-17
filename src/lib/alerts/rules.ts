@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { computeProjectSpend } from "@/lib/projects/health";
 import { computeProjectHealthScore } from "@/lib/projects/health-score";
+import { computeChurnRisk } from "@/lib/clients/churn";
 import type { RiskLevel } from "@/generated/prisma/client";
 
 const DAY_MS = 86_400_000;
@@ -151,46 +152,38 @@ export async function evaluatePipelineDecline(organizationId: string): Promise<A
   ];
 }
 
-const CHURN_INACTIVITY_DAYS = 90;
+const CLIENT_CHURN_ALERT_THRESHOLD = 70;
 
 /**
- * Real ACTIVE clients with a real contract value and no linked Invoice or
- * Project touched (updatedAt) in the last 90 days — a client with zero
- * linked invoices/projects is honestly "no recent activity" too, not
- * skipped. One result per at-risk client.
+ * Real ACTIVE clients with a real contract value, evaluated against the
+ * deterministic multi-factor ChurnRiskAssessment (src/lib/clients/churn.ts,
+ * Phase 5 of the AI Business Growth Engine) instead of the single
+ * days-since-activity signal this used to compute inline. A client with no
+ * ClientHealthSnapshot yet (the nightly job hasn't scored it) is honestly
+ * skipped, not treated as zero risk.
  */
 export async function evaluateClientChurnRisk(organizationId: string): Promise<AlertRuleResult[]> {
   const clients = await prisma.client.findMany({
     where: { organizationId, status: "ACTIVE", contractValue: { not: null } },
-    select: {
-      id: true,
-      name: true,
-      contractValue: true,
-      invoices: { select: { updatedAt: true } },
-      projects: { select: { updatedAt: true } },
-    },
+    select: { id: true, name: true, contractValue: true },
   });
 
-  const now = Date.now();
   const results: AlertRuleResult[] = [];
 
   for (const client of clients) {
-    const activityTimestamps = [...client.invoices, ...client.projects].map((r) => r.updatedAt.getTime());
-    const lastActivity = activityTimestamps.length > 0 ? Math.max(...activityTimestamps) : null;
-    const daysSince = lastActivity == null ? Infinity : (now - lastActivity) / DAY_MS;
-    if (daysSince <= CHURN_INACTIVITY_DAYS) continue;
+    const computation = await computeChurnRisk(client.id);
+    if (!computation || computation.probabilityScore < CLIENT_CHURN_ALERT_THRESHOLD) continue;
 
-    const severity: RiskLevel = daysSince > 180 ? "CRITICAL" : daysSince > 120 ? "HIGH" : "MEDIUM";
-    const daysLabel = Number.isFinite(daysSince) ? `${Math.round(daysSince)} day(s)` : "no recorded activity ever";
+    const topReason = [...computation.reasons].sort((a, b) => b.contribution - a.contribution)[0];
     results.push({
       relatedEntityType: "Client",
       relatedEntityId: client.id,
       title: `Client "${client.name}" is at churn risk`,
-      message: `"${client.name}" (contract value ${client.contractValue}) has had ${daysLabel} since its last linked invoice or project update.`,
-      formula: `daysSinceLastActivity (${Number.isFinite(daysSince) ? Math.round(daysSince) : "∞"}) > ${CHURN_INACTIVITY_DAYS}`,
-      metricValue: Number.isFinite(daysSince) ? Math.round(daysSince) : 999_999,
-      thresholdValue: CHURN_INACTIVITY_DAYS,
-      severity,
+      message: `"${client.name}" (contract value ${client.contractValue}) has a real churn probability of ${computation.probabilityScore}/100, driven most by ${topReason.factor} (score ${topReason.value}/100).`,
+      formula: `churnProbabilityScore (${computation.probabilityScore}) >= ${CLIENT_CHURN_ALERT_THRESHOLD} — weighted from ClientHealthSnapshot's engagement/payment/contract/delivery factors`,
+      metricValue: computation.probabilityScore,
+      thresholdValue: CLIENT_CHURN_ALERT_THRESHOLD,
+      severity: computation.riskLevel,
     });
   }
 
@@ -415,4 +408,167 @@ export async function evaluateSecurityRisk(organizationId: string): Promise<Aler
   }
 
   return results;
+}
+
+// ============================= Business Risk Engine (AI Business Growth Engine) =============================
+// Two additional deterministic rules, same discipline as every rule above —
+// real DB aggregate crossing a documented threshold, never an LLM guess.
+
+const REVENUE_CONCENTRATION_TRAILING_MONTHS = 12;
+const REVENUE_CONCENTRATION_THRESHOLD_PCT = 40;
+const RESOURCE_UTILIZATION_TRAILING_DAYS = 7;
+const RESOURCE_UTILIZATION_THRESHOLD_PCT = 100;
+
+/**
+ * Real trailing-12-month paid-Invoice revenue, grouped by Client — fires
+ * when the single largest client's share exceeds 40%. Only invoices with a
+ * real clientId attached are counted (the denominator is "revenue
+ * attributable to a specific client", stated honestly in `formula`, not
+ * total org revenue). Requires at least 2 distinct paying clients — a
+ * single-client org is trivially "100% concentrated" by having only one
+ * client at all, which isn't an actionable diversification risk the way a
+ * skew among many clients is.
+ */
+export async function evaluateRevenueConcentration(organizationId: string): Promise<AlertRuleResult[]> {
+  const cutoff = new Date(Date.now() - REVENUE_CONCENTRATION_TRAILING_MONTHS * 30 * DAY_MS);
+  const invoices = await prisma.invoice.findMany({
+    where: { organizationId, status: "PAID", clientId: { not: null }, paidAt: { gte: cutoff } },
+    select: { clientId: true, grandTotal: true },
+  });
+
+  const revenueByClient = new Map<string, number>();
+  for (const invoice of invoices) {
+    if (!invoice.clientId) continue;
+    revenueByClient.set(invoice.clientId, (revenueByClient.get(invoice.clientId) ?? 0) + invoice.grandTotal);
+  }
+  if (revenueByClient.size < 2) return [];
+
+  const totalRevenue = Array.from(revenueByClient.values()).reduce((sum, v) => sum + v, 0);
+  if (totalRevenue <= 0) return [];
+
+  const [topClientId, topRevenue] = Array.from(revenueByClient.entries()).sort((a, b) => b[1] - a[1])[0];
+  const sharePct = (topRevenue / totalRevenue) * 100;
+  if (sharePct <= REVENUE_CONCENTRATION_THRESHOLD_PCT) return [];
+
+  const client = await prisma.client.findUnique({ where: { id: topClientId }, select: { name: true } });
+  const severity: RiskLevel = sharePct > 70 ? "CRITICAL" : sharePct > 55 ? "HIGH" : "MEDIUM";
+
+  return [
+    {
+      relatedEntityType: "Client",
+      relatedEntityId: topClientId,
+      title: `Revenue is concentrated in one client: "${client?.name ?? topClientId}"`,
+      message: `"${client?.name ?? topClientId}" accounts for ${sharePct.toFixed(1)}% of real client-attributed revenue over the trailing ${REVENUE_CONCENTRATION_TRAILING_MONTHS} months (${topRevenue.toFixed(2)} of ${totalRevenue.toFixed(2)}).`,
+      formula: `topClientRevenueShare (${sharePct.toFixed(1)}%) > ${REVENUE_CONCENTRATION_THRESHOLD_PCT}% — Σ PAID Invoice.grandTotal grouped by clientId, trailing ${REVENUE_CONCENTRATION_TRAILING_MONTHS} months, among invoices with a client attached`,
+      metricValue: Math.round(sharePct * 10) / 10,
+      thresholdValue: REVENUE_CONCENTRATION_THRESHOLD_PCT,
+      severity,
+    },
+  ];
+}
+
+/**
+ * Real Σ TimeEntry.durationMinutes logged in the trailing 7 days across
+ * open projects, vs. real Σ ProjectMember.capacityHoursPerWeek on those
+ * same open projects — fires when logged hours exceed stated capacity
+ * (the team is working more than its own declared bandwidth). Requires at
+ * least one ProjectMember with a real capacityHoursPerWeek set — orgs that
+ * never fill that field in have no honest baseline to compare against and
+ * are skipped, not treated as zero risk.
+ */
+export async function evaluateResourceShortage(organizationId: string): Promise<AlertRuleResult[]> {
+  const cutoff = new Date(Date.now() - RESOURCE_UTILIZATION_TRAILING_DAYS * DAY_MS);
+
+  const [members, timeEntries] = await Promise.all([
+    prisma.projectMember.findMany({
+      where: { organizationId, capacityHoursPerWeek: { not: null }, project: { status: { in: Array.from(OPEN_PROJECT_STATUSES) as never[] } } },
+      select: { capacityHoursPerWeek: true },
+    }),
+    prisma.timeEntry.findMany({
+      where: { organizationId, startedAt: { gte: cutoff }, durationMinutes: { not: null }, project: { status: { in: Array.from(OPEN_PROJECT_STATUSES) as never[] } } },
+      select: { durationMinutes: true },
+    }),
+  ]);
+
+  if (members.length === 0) return [];
+
+  const totalWeeklyCapacityHours = members.reduce((sum, m) => sum + (m.capacityHoursPerWeek ?? 0), 0);
+  if (totalWeeklyCapacityHours <= 0) return [];
+
+  const loggedHours = timeEntries.reduce((sum, t) => sum + (t.durationMinutes ?? 0), 0) / 60;
+  const utilizationPct = (loggedHours / totalWeeklyCapacityHours) * 100;
+  if (utilizationPct <= RESOURCE_UTILIZATION_THRESHOLD_PCT) return [];
+
+  const severity: RiskLevel = utilizationPct > 150 ? "CRITICAL" : utilizationPct > 125 ? "HIGH" : "MEDIUM";
+
+  return [
+    {
+      relatedEntityType: "Organization",
+      relatedEntityId: "resource-utilization",
+      title: "Team is over real declared capacity",
+      message: `${loggedHours.toFixed(1)} real hour(s) were logged in the last ${RESOURCE_UTILIZATION_TRAILING_DAYS} days across open projects, vs ${totalWeeklyCapacityHours.toFixed(1)} real declared weekly capacity hour(s) — ${utilizationPct.toFixed(0)}% utilization.`,
+      formula: `utilization (${utilizationPct.toFixed(0)}%) > ${RESOURCE_UTILIZATION_THRESHOLD_PCT}% — Σ TimeEntry.durationMinutes (trailing ${RESOURCE_UTILIZATION_TRAILING_DAYS} days, open projects) ÷ Σ ProjectMember.capacityHoursPerWeek (open projects) × 100`,
+      metricValue: Math.round(utilizationPct),
+      thresholdValue: RESOURCE_UTILIZATION_THRESHOLD_PCT,
+      severity,
+    },
+  ];
+}
+
+// ============================= HR Agent (Marketplace & AI Skills Ecosystem) =============================
+
+const LATE_LEAVE_APPROVAL_DAYS = 3;
+
+/** Real PENDING LeaveRequest rows sitting unreviewed for too long — a real staffing-planning risk for the requester's manager. */
+export async function evaluateLateLeaveApproval(organizationId: string): Promise<AlertRuleResult[]> {
+  const cutoff = new Date(Date.now() - LATE_LEAVE_APPROVAL_DAYS * DAY_MS);
+  const requests = await prisma.leaveRequest.findMany({
+    where: { organizationId, status: "PENDING", createdAt: { lt: cutoff } },
+    include: { user: { select: { name: true, email: true } } },
+  });
+
+  const now = Date.now();
+  return requests.map((request) => {
+    const daysPending = Math.round((now - request.createdAt.getTime()) / DAY_MS);
+    const severity: RiskLevel = daysPending > 10 ? "CRITICAL" : daysPending > 5 ? "HIGH" : "MEDIUM";
+    const requesterLabel = request.user.name ?? request.user.email ?? "A team member";
+    return {
+      relatedEntityType: "LeaveRequest",
+      relatedEntityId: request.id,
+      title: `Leave request from ${requesterLabel} is still pending`,
+      message: `${requesterLabel}'s ${request.type.toLowerCase()} leave request (${request.startDate.toDateString()} – ${request.endDate.toDateString()}) has been pending for ${daysPending} day(s).`,
+      formula: `daysPending (${daysPending}) > ${LATE_LEAVE_APPROVAL_DAYS}`,
+      metricValue: daysPending,
+      thresholdValue: LATE_LEAVE_APPROVAL_DAYS,
+      severity,
+    };
+  });
+}
+
+// ============================= Support Agent (Marketplace & AI Skills Ecosystem) =============================
+
+const OPEN_SUPPORT_STATUSES = ["BACKLOG", "RUNNING", "BLOCKED"] as const;
+
+/** Real TaskType.SUPPORT tasks past their real dueDate (used as the SLA deadline) and still open — the honest, no-fabricated-SLA-model proxy, same convention as evaluateDealStalled's use of expectedCloseDate. */
+export async function evaluateSupportSlaBreach(organizationId: string): Promise<AlertRuleResult[]> {
+  const now = new Date();
+  const tickets = await prisma.task.findMany({
+    where: { organizationId, type: "SUPPORT", dueDate: { lt: now }, status: { in: Array.from(OPEN_SUPPORT_STATUSES) as never[] } },
+    select: { id: true, title: true, dueDate: true, priority: true },
+  });
+
+  return tickets.map((ticket) => {
+    const hoursOverdue = Math.round((now.getTime() - ticket.dueDate!.getTime()) / (60 * 60 * 1000));
+    const severity: RiskLevel = ticket.priority === "URGENT" || hoursOverdue > 48 ? "CRITICAL" : hoursOverdue > 24 ? "HIGH" : "MEDIUM";
+    return {
+      relatedEntityType: "Task",
+      relatedEntityId: ticket.id,
+      title: `Support ticket past SLA: "${ticket.title}"`,
+      message: `"${ticket.title}" is ${hoursOverdue} hour(s) past its real SLA deadline and still open.`,
+      formula: `hoursOverdue (${hoursOverdue}) > 0 — real Task.dueDate used as the SLA deadline, status still open`,
+      metricValue: hoursOverdue,
+      thresholdValue: 0,
+      severity,
+    };
+  });
 }

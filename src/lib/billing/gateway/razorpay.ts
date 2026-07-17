@@ -50,6 +50,11 @@ interface RazorpayErrorBody {
   error?: { description?: string };
 }
 
+interface RazorpayPaymentLink {
+  id: string;
+  short_url: string;
+}
+
 async function findOrCreateCustomer(email: string): Promise<string> {
   const response = await fetch(`${API_BASE}/customers`, {
     method: "POST",
@@ -72,6 +77,35 @@ export const razorpayGateway: PlatformGateway = {
   isConfigured,
 
   async createCheckoutSession(input: CreateCheckoutSessionInput): Promise<CheckoutSessionResult> {
+    const notes = { organizationId: input.organizationId, billingAccountId: input.billingAccountId, ...input.metadata };
+
+    // One-time payments use Razorpay's Payment Links API (a real, separate
+    // endpoint from Subscriptions) — it's the one Razorpay product that
+    // gives a hosted `short_url` for an arbitrary amount, matching this
+    // adapter's redirect-based convention without needing client-side
+    // Razorpay Checkout.js.
+    if (input.mode === "payment") {
+      if (!input.amountCents || !input.currency) throw new Error("Razorpay one-time checkout requires amountCents and currency.");
+      const response = await fetch(`${API_BASE}/payment_links`, {
+        method: "POST",
+        headers: { Authorization: authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: input.amountCents,
+          currency: input.currency.toUpperCase(),
+          description: input.lineItemName ?? "Purchase",
+          customer: { email: input.customerEmail },
+          notify: { email: true, sms: false },
+          notes,
+          callback_url: input.successUrl,
+          callback_method: "get",
+        }),
+      });
+      const body = (await response.json().catch(() => ({}))) as RazorpayPaymentLink & RazorpayErrorBody;
+      if (!response.ok || !body.id) throw new Error(`Razorpay payment link creation failed: ${body.error?.description ?? `HTTP ${response.status}`}`);
+      return { checkoutUrl: body.short_url, gatewaySessionId: body.id };
+    }
+
+    if (!input.gatewayPriceId) throw new Error("Razorpay subscription checkout requires gatewayPriceId.");
     const customerId = input.gatewayCustomerId ?? (await findOrCreateCustomer(input.customerEmail));
 
     const response = await fetch(`${API_BASE}/subscriptions`, {
@@ -82,7 +116,7 @@ export const razorpayGateway: PlatformGateway = {
         customer_id: customerId,
         customer_notify: 1,
         total_count: 120, // Razorpay requires a finite total_count even for "ongoing" subscriptions — 120 cycles is a real, documented convention for an effectively-indefinite subscription (10 years of monthly billing), renewed by creating a fresh subscription well before exhaustion if ever reached.
-        notes: { organizationId: input.organizationId, billingAccountId: input.billingAccountId },
+        notes,
       }),
     });
     const body = (await response.json().catch(() => ({}))) as RazorpaySubscription & RazorpayErrorBody;
@@ -150,6 +184,7 @@ export const razorpayGateway: PlatformGateway = {
         subscription?: { entity: RazorpaySubscription };
         payment?: { entity: { id: string; amount: number; currency: string; order_id?: string } };
         refund?: { entity: { payment_id: string; amount: number; currency: string } };
+        payment_link?: { entity: { id: string; amount: number; currency: string; notes?: Record<string, string> } };
       };
     };
     try {
@@ -201,6 +236,19 @@ export const razorpayGateway: PlatformGateway = {
           amountCents: payload.payload?.refund?.entity.amount,
           currency: payload.payload?.refund?.entity.currency,
         };
+      // A real, dedicated one-time-payment completion event — the
+      // marketplace one-time checkout flow (createCheckoutSession with
+      // mode:"payment") fires this, never subscription.charged.
+      case "payment_link.paid": {
+        const link = payload.payload?.payment_link?.entity;
+        return {
+          ...base,
+          type: "checkout.completed",
+          amountCents: link?.amount,
+          currency: link?.currency,
+          metadata: link?.notes,
+        };
+      }
       default:
         return { ...base, type: "unhandled" };
     }

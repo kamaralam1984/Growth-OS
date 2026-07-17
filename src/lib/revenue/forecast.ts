@@ -11,21 +11,38 @@ import { getMRR } from "@/lib/revenue/subscriptions";
  * src/lib/revenue/subscriptions.ts rather than reimplementing normalization.
  */
 
-export type ForecastHorizon = "month" | "quarter" | "year";
+export type ForecastHorizon = "day" | "week" | "month" | "quarter" | "year";
 
 // Same "open deal" definition as crm/_lib/forecast.ts's TERMINAL_STAGE_NAMES.
 const TERMINAL_STAGE_NAMES = ["Won", "Lost", "Archived"];
 
 const HORIZON_WINDOW_DAYS: Record<ForecastHorizon, number> = {
+  day: 1,
+  week: 7,
   month: 30,
   quarter: 90,
   year: 365,
 };
 
+// Fractional for day/week — a real fraction of a 30-day month, not rounded
+// to 0, so recurringContribution stays proportionate at short horizons.
 const HORIZON_MONTHS: Record<ForecastHorizon, number> = {
+  day: 1 / 30,
+  week: 7 / 30,
   month: 1,
   quarter: 3,
   year: 12,
+};
+
+// Deterministic penalty applied to confidenceScore below — longer horizons
+// are inherently less certain (more can change before the window closes).
+// A judgment call, documented in confidenceFormula rather than left opaque.
+const HORIZON_CONFIDENCE_PENALTY: Record<ForecastHorizon, number> = {
+  day: 0,
+  week: 2,
+  month: 5,
+  quarter: 15,
+  year: 30,
 };
 
 export interface RevenueForecast {
@@ -35,6 +52,15 @@ export interface RevenueForecast {
   total: number;
   formula: string;
   dataSufficient: boolean;
+  /** Count of real open deals whose expectedCloseDate falls in this horizon window. */
+  expectedClosuresCount: number;
+  /**
+   * 0-100, entirely DETERMINISTIC — never AI-guessed (an AI-invented
+   * confidence number would itself violate this app's no-fabrication rule).
+   * See confidenceFormula for the exact computation.
+   */
+  confidenceScore: number;
+  confidenceFormula: string;
 }
 
 /**
@@ -71,22 +97,40 @@ export async function getRevenueForecast(organizationId: string, horizon: Foreca
 
   const monthsInHorizon = HORIZON_MONTHS[horizon];
   const recurringContribution = mrr * monthsInHorizon;
+  const total = pipelineContribution + recurringContribution;
+  const expectedClosuresCount = openDealsInWindow.length;
 
   const dataSufficient = openDealsInWindow.length > 0 || activeSubscriptionsCount > 0;
+
+  // Deterministic composite: more real deals feeding the pipeline number
+  // raises confidence (capped), a higher share of predictable recurring
+  // revenue raises it further, and longer horizons are penalized for
+  // having more time for reality to diverge from the projection.
+  const closuresComponent = Math.min(30, expectedClosuresCount * 5);
+  const recurringShareComponent = total > 0 ? (recurringContribution / total) * 20 : 0;
+  const horizonPenalty = HORIZON_CONFIDENCE_PENALTY[horizon];
+  const confidenceScore = Math.max(0, Math.min(100, Math.round(40 + closuresComponent + recurringShareComponent - horizonPenalty)));
 
   return {
     horizon,
     pipelineContribution,
     recurringContribution,
-    total: pipelineContribution + recurringContribution,
+    total,
     formula:
       `Pipeline contribution = Σ (each open deal's value × its own probability ÷ 100) for deals with an ` +
       `expectedCloseDate in the next ${windowDays} days. Recurring contribution = current MRR (Σ each ACTIVE ` +
       `subscription's amount, normalized to monthly — MONTHLY amount ÷ 1, QUARTERLY ÷ 3, YEARLY ÷ 12) × ` +
-      `${monthsInHorizon} month(s) in this horizon. This recurring figure is NOT discounted for projected churn ` +
-      `and applies no growth curve — it assumes every currently-active subscription renews unchanged for the ` +
-      `full horizon, which will overstate revenue if any of them cancel.`,
+      `${monthsInHorizon.toFixed(2)} month(s) in this horizon. This recurring figure is NOT discounted for ` +
+      `projected churn and applies no growth curve — it assumes every currently-active subscription renews ` +
+      `unchanged for the full horizon, which will overstate revenue if any of them cancel.`,
     dataSufficient,
+    expectedClosuresCount,
+    confidenceScore,
+    confidenceFormula:
+      `40 (base) + min(30, ${expectedClosuresCount} closures × 5) + (recurring ÷ total × 20) − ${horizonPenalty} ` +
+      `(horizon penalty for "${horizon}") = ${confidenceScore}. Deterministic only — not AI-estimated. Higher ` +
+      `when more real deals feed the pipeline number and more of the total is predictable recurring revenue; ` +
+      `lower for longer horizons where more can change before the window closes.`,
   };
 }
 

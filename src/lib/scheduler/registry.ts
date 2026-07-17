@@ -1,20 +1,37 @@
 import { prisma } from "@/lib/prisma";
 import { ensureTodaySnapshot } from "@/lib/analytics";
 import { ensureTodayProjectHealthSnapshot } from "@/lib/projects/health-score";
+import { ensureTodayClientHealthSnapshot } from "@/lib/clients/health-score";
+import { ensureTodayGrowthScoreSnapshot } from "@/lib/growth/score";
+import { generateGrowthImprovementPlan } from "@/lib/growth/improvement-plan";
+import { ensureLatestChurnRiskAssessment } from "@/lib/clients/churn";
+import { generateClientOpportunities } from "@/lib/clients/opportunity-engine";
+import { refreshCompetitorSnapshot } from "@/lib/company-discovery/competitor-discovery";
+import { discoverMarketTrends } from "@/lib/market-intelligence/trend-discovery";
+import { generateExecutiveInsights } from "@/lib/ai/insights-generator";
+import { generateDailyBrief } from "@/lib/ai/executive-briefing";
 import { startSystemTriggeredExecutiveMeeting } from "@/lib/ai/meeting-lifecycle";
 import { startDeliveryBoardMeeting, runDeliveryBoardRound } from "@/lib/ai/delivery-board-orchestrator";
 import { advanceSequenceCore } from "@/app/dashboard/outreach/_lib/sequence-actions";
 import { fireOverdueIfApplicable } from "@/app/dashboard/crm/_lib/task-actions";
 import { fireOverdueIfApplicable as fireInvoiceOverdueIfApplicable } from "@/app/dashboard/proposal/_lib/invoice-actions";
 import { isAIConnected } from "@/lib/ai/client";
-import { notifyUser } from "@/lib/notifications";
+import { notifyUser, notifyOrganizationOwners } from "@/lib/notifications";
 import { sendEmail } from "@/lib/email";
 import { evaluateAlerts } from "@/lib/alerts/engine";
 import { runAndRecordFullSystemCheck } from "@/lib/monitoring/aggregate";
+import { runLeadDiscoveryForAllOrganizations } from "@/lib/business-development/discovery-job";
+import { runCompanyResearchBacklog } from "@/lib/business-development/company-research-job";
+import { runBackupScript } from "@/lib/ops/run-backup-script";
+import { runRestoreTest } from "@/lib/ops/restore-test";
 import type { JobDefinition, JobRunLog } from "./types";
 
 const DELIVERY_ROUNDS_PER_MEETING = 2;
 const AUDIT_LOG_RETENTION_DAYS = 400;
+// A byproduct of scheduling executive-insights-refresh daily (previously
+// manual-refresh-only, ~7 rows/org/run): without pruning, Insight rows
+// accumulate forever. 90 days keeps a real trend history without unbounded growth.
+const INSIGHT_RETENTION_DAYS = 90;
 // Judgment call: LinkedIn sending is manual by design (the user pastes the
 // message themselves), so a draft sitting APPROVED/QUEUED isn't a bug — but
 // 2 days idle is long enough that it's likely forgotten, not just "later
@@ -29,18 +46,36 @@ const PROPOSAL_FOLLOWUP_THRESHOLD_DAYS = 5;
 // (a useful heads-up before the due date) and right after it's "just gone
 // overdue" (still fresh enough that a nudge reads as helpful, not nagging).
 const INVOICE_DUE_REMINDER_WINDOW_DAYS = 3;
+// SecurityEvent is security TELEMETRY, not an audit-of-record the way
+// AuditLog is (400 days) — a shorter window is defensible. See
+// securityEventRetentionCleanupJob's own doc comment for how this cutoff is
+// clamped against any currently-open Incident so pruning can never remove a
+// row from the time window of an active investigation.
+const SECURITY_EVENT_RETENTION_DAYS = 180;
+// A DeviceSession with no activity in 180+ days is an abandoned/expired
+// session, not meaningful security history worth keeping indefinitely.
+// Scoped strictly by lastActiveAt (not createdAt), so a session that's old
+// but still genuinely in use (lastActiveAt keeps refreshing) is never
+// touched.
+const DEVICE_SESSION_INACTIVE_RETENTION_DAYS = 180;
+// Only prunes Restore rows where isTest is true (weekly-restore-test's own
+// output — see restoreTestRetentionCleanupJob's doc comment for why real
+// Backup rows/files are deliberately NOT pruned here). 90 days keeps ~13
+// weeks of restore-test history without unbounded growth.
+const RESTORE_TEST_RETENTION_DAYS = 90;
 
 /**
  * Every job below delegates to a real, already-shipped (or newly-added)
  * business function — nothing here is a no-op or a placeholder that merely
  * pretends to do work. Jobs named in the original brief whose underlying
- * feature doesn't exist YET (CRM follow-up reminders, lead-scoring refresh,
- * opportunity/website rescans, cold-email/LinkedIn scheduling, proposal/
- * invoice/subscription reminders, weekly/monthly executive reports, AI
- * memory consolidation, knowledge-base indexing, cache cleanup) are
- * intentionally NOT registered here — each is added in the batch that
- * builds its underlying feature (see /home/server/.claude/plans for the
- * batch plan), rather than faking a job that would run and do nothing.
+ * feature doesn't exist YET (AI memory consolidation, knowledge-base
+ * indexing, cache cleanup) are intentionally NOT registered here — each is
+ * added in the batch that builds its underlying feature, rather than
+ * faking a job that would run and do nothing. Phase 17 (Autonomous AI
+ * Business Development System) added: `lead-discovery` and
+ * `company-research-backlog` — both per-org opt-in via
+ * `LeadDiscoveryConfig.discoveryEnabled`, since they create real CRM data
+ * and spend real AI credits unattended.
  */
 
 async function dailyMetricSnapshotJob(): Promise<JobRunLog[]> {
@@ -72,6 +107,239 @@ async function dailyProjectHealthSnapshotJob(): Promise<JobRunLog[]> {
   }
   logs.push({ level: "info", message: `Snapshotted health for ${projects.length} active project(s).` });
   return logs;
+}
+
+async function clientHealthSnapshotJob(): Promise<JobRunLog[]> {
+  const clients = await prisma.client.findMany({
+    where: { status: "ACTIVE" },
+    select: { id: true, organizationId: true },
+  });
+  const logs: JobRunLog[] = [];
+  for (const client of clients) {
+    try {
+      await ensureTodayClientHealthSnapshot(client.id, client.organizationId);
+    } catch (error) {
+      logs.push({ level: "error", message: error instanceof Error ? error.message : String(error), organizationId: client.organizationId });
+    }
+  }
+  logs.push({ level: "info", message: `Snapshotted health for ${clients.length} active client(s).` });
+  return logs;
+}
+
+async function growthScoreSnapshotJob(): Promise<JobRunLog[]> {
+  const orgs = await prisma.organization.findMany({ select: { id: true } });
+  const logs: JobRunLog[] = [];
+  for (const org of orgs) {
+    try {
+      await ensureTodayGrowthScoreSnapshot(org.id);
+    } catch (error) {
+      logs.push({ level: "error", message: error instanceof Error ? error.message : String(error), organizationId: org.id });
+    }
+  }
+  logs.push({ level: "info", message: `Snapshotted Growth Score for ${orgs.length} organization(s).` });
+  return logs;
+}
+
+async function growthImprovementPlanRefreshJob(): Promise<JobRunLog[]> {
+  if (!isAIConnected()) return [{ level: "warn", message: "Skipped — no AI provider configured." }];
+  const orgs = await prisma.organization.findMany({ select: { id: true } });
+  const logs: JobRunLog[] = [];
+  let generated = 0;
+  for (const org of orgs) {
+    try {
+      const snapshot = await prisma.growthScoreSnapshot.findFirst({ where: { organizationId: org.id } });
+      if (!snapshot) continue; // nothing to ground a plan in yet — skip honestly rather than generating from nothing
+      await generateGrowthImprovementPlan(org.id);
+      generated += 1;
+    } catch (error) {
+      logs.push({ level: "error", message: error instanceof Error ? error.message : String(error), organizationId: org.id });
+    }
+  }
+  logs.push({ level: "info", message: `Generated ${generated} growth improvement plan(s).` });
+  return logs;
+}
+
+async function clientChurnAssessmentJob(): Promise<JobRunLog[]> {
+  const clients = await prisma.client.findMany({
+    where: { status: "ACTIVE" },
+    select: { id: true, organizationId: true },
+  });
+  const logs: JobRunLog[] = [];
+  for (const client of clients) {
+    try {
+      await ensureLatestChurnRiskAssessment(client.id, client.organizationId);
+    } catch (error) {
+      logs.push({ level: "error", message: error instanceof Error ? error.message : String(error), organizationId: client.organizationId });
+    }
+  }
+  logs.push({ level: "info", message: `Assessed churn risk for ${clients.length} active client(s).` });
+  return logs;
+}
+
+const CLIENT_OPPORTUNITY_SCAN_MAX_PER_ORG = 5;
+
+async function clientOpportunityScanJob(): Promise<JobRunLog[]> {
+  if (!isAIConnected()) return [{ level: "warn", message: "Skipped — no AI provider configured (deterministic upsell/cross-sell still needs a client batch, so the whole scan waits for AI so referral candidacy isn't silently incomplete)." }];
+
+  const orgs = await prisma.organization.findMany({ select: { id: true } });
+  const logs: JobRunLog[] = [];
+  let totalGenerated = 0;
+
+  for (const org of orgs) {
+    // Oldest-scanned-first via absence of any prior ClientOpportunity row —
+    // bounded batch per run (real AI spend for the referral step), same
+    // pattern as company-research-backlog.
+    const clients = await prisma.client.findMany({
+      where: { organizationId: org.id, status: "ACTIVE", opportunities: { none: {} } },
+      orderBy: { createdAt: "asc" },
+      take: CLIENT_OPPORTUNITY_SCAN_MAX_PER_ORG,
+      select: { id: true },
+    });
+    for (const client of clients) {
+      try {
+        const created = await generateClientOpportunities(client.id, org.id);
+        totalGenerated += created.length;
+      } catch (error) {
+        logs.push({ level: "error", message: error instanceof Error ? error.message : String(error), organizationId: org.id });
+      }
+    }
+  }
+  logs.push({ level: "info", message: `Generated ${totalGenerated} client opportunit(y/ies) across all organizations.` });
+  return logs;
+}
+
+async function competitorIntelligenceRefreshJob(): Promise<JobRunLog[]> {
+  if (!isAIConnected()) return [{ level: "warn", message: "Skipped — no AI provider configured." }];
+
+  const orgs = await prisma.organizationDNA.findMany({
+    where: { status: "APPROVED" },
+    distinct: ["organizationId"],
+    select: { organizationId: true },
+  });
+  const logs: JobRunLog[] = [];
+  let refreshed = 0;
+  for (const { organizationId } of orgs) {
+    try {
+      await refreshCompetitorSnapshot(organizationId);
+      refreshed += 1;
+    } catch (error) {
+      logs.push({ level: "error", message: error instanceof Error ? error.message : String(error), organizationId });
+    }
+  }
+  logs.push({ level: "info", message: `Refreshed competitor intelligence for ${refreshed} organization(s).` });
+  return logs;
+}
+
+async function marketTrendRefreshJob(): Promise<JobRunLog[]> {
+  if (!isAIConnected()) return [{ level: "warn", message: "Skipped — no AI provider configured." }];
+
+  const orgs = await prisma.organization.findMany({ select: { id: true } });
+  const logs: JobRunLog[] = [];
+  let refreshed = 0;
+  for (const org of orgs) {
+    try {
+      await discoverMarketTrends(org.id);
+      refreshed += 1;
+    } catch (error) {
+      logs.push({ level: "error", message: error instanceof Error ? error.message : String(error), organizationId: org.id });
+    }
+  }
+  logs.push({ level: "info", message: `Refreshed market trend intelligence for ${refreshed} organization(s).` });
+  return logs;
+}
+
+function startOfToday(): Date {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+async function executiveInsightsRefreshJob(): Promise<JobRunLog[]> {
+  if (!isAIConnected()) return [{ level: "warn", message: "Skipped — no AI provider configured." }];
+
+  const orgs = await prisma.organization.findMany({ select: { id: true } });
+  const logs: JobRunLog[] = [];
+  let generated = 0;
+  const today = startOfToday();
+
+  for (const org of orgs) {
+    try {
+      // Dedup guard: don't stomp a manual "Refresh insights" click that
+      // already ran today via the Command Center button.
+      const generatedToday = await prisma.insight.findFirst({ where: { organizationId: org.id, createdAt: { gte: today } } });
+      if (generatedToday) continue;
+      await generateExecutiveInsights(org.id);
+      generated += 1;
+    } catch (error) {
+      logs.push({ level: "error", message: error instanceof Error ? error.message : String(error), organizationId: org.id });
+    }
+  }
+  logs.push({ level: "info", message: `Generated Executive Insights for ${generated} organization(s).` });
+  return logs;
+}
+
+async function insightRetentionCleanupJob(): Promise<JobRunLog[]> {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - INSIGHT_RETENTION_DAYS);
+  const result = await prisma.insight.deleteMany({ where: { createdAt: { lt: cutoff } } });
+  return [{ level: "info", message: `Pruned ${result.count} Insight row(s) older than ${INSIGHT_RETENTION_DAYS} days.` }];
+}
+
+async function dailyCeoBriefJob(): Promise<JobRunLog[]> {
+  const orgs = await prisma.organization.findMany({ select: { id: true } });
+  const logs: JobRunLog[] = [];
+  let generated = 0;
+  for (const org of orgs) {
+    try {
+      await generateDailyBrief(org.id);
+      await notifyOrganizationOwners({
+        organizationId: org.id,
+        type: "DAILY_BRIEF_READY",
+        title: "Your daily brief is ready",
+        message: "The AI CEO Daily Brief has been generated with today's real business data.",
+      });
+      generated += 1;
+    } catch (error) {
+      logs.push({ level: "error", message: error instanceof Error ? error.message : String(error), organizationId: org.id });
+    }
+  }
+  logs.push({ level: "info", message: `Generated the daily CEO brief for ${generated} organization(s).` });
+  return logs;
+}
+
+// Phase 20 (Disaster Recovery): the real backup mechanism (scripts/backup-
+// database.sh, scripts/backup-storage.sh, src/lib/ops/run-backup-script.ts)
+// already existed but was never actually scheduled — these three jobs are
+// what finally wires it into automated cadence. Every run writes a real
+// Backup/Restore row (Production Dashboard) regardless of outcome; a
+// failure is reported honestly, never silently retried into a fabricated
+// success.
+
+async function nightlyDatabaseBackupJob(): Promise<JobRunLog[]> {
+  const backup = await runBackupScript("DATABASE");
+  if (backup.status === "SUCCEEDED") {
+    return [{ level: "info", message: `Database backup ${backup.id} succeeded (${backup.sizeBytes ?? 0} bytes).` }];
+  }
+  return [{ level: "error", message: `Database backup ${backup.id} failed: ${backup.error ?? "unknown error"}` }];
+}
+
+async function weeklyStorageBackupJob(): Promise<JobRunLog[]> {
+  const backup = await runBackupScript("STORAGE");
+  if (backup.status === "SUCCEEDED") {
+    return [{ level: "info", message: `Storage backup ${backup.id} succeeded (${backup.sizeBytes ?? 0} bytes).` }];
+  }
+  return [{ level: "error", message: `Storage backup ${backup.id} failed: ${backup.error ?? "unknown error"}` }];
+}
+
+async function weeklyRestoreTestJob(): Promise<JobRunLog[]> {
+  const latestBackup = await prisma.backup.findFirst({ where: { type: "DATABASE", status: "SUCCEEDED" }, orderBy: { completedAt: "desc" } });
+  if (!latestBackup) return [{ level: "warn", message: "Skipped — no SUCCEEDED DATABASE backup exists yet to restore-test." }];
+
+  const restore = await runRestoreTest(latestBackup.id);
+  if (restore.status === "SUCCEEDED") {
+    return [{ level: "info", message: `Restore test ${restore.id} succeeded against backup ${latestBackup.id}.` }];
+  }
+  return [{ level: "error", message: `Restore test ${restore.id} failed against backup ${latestBackup.id}: ${restore.error ?? "unknown error"}` }];
 }
 
 async function dailyExecutiveBoardMeetingJob(): Promise<JobRunLog[]> {
@@ -280,6 +548,87 @@ async function auditLogRetentionCleanupJob(): Promise<JobRunLog[]> {
   cutoff.setDate(cutoff.getDate() - AUDIT_LOG_RETENTION_DAYS);
   const result = await prisma.auditLog.deleteMany({ where: { createdAt: { lt: cutoff } } });
   return [{ level: "info", message: `Pruned ${result.count} audit log row(s) older than ${AUDIT_LOG_RETENTION_DAYS} days.` }];
+}
+
+/**
+ * SecurityEvent retention. Unlike AuditLog, a CRITICAL-severity SecurityEvent
+ * can trigger ensureIncidentForCriticalEvent (src/lib/security/incidents.ts),
+ * which opens or appends to an Incident — but there is no FK from
+ * SecurityEvent back to the Incident(s) it may have triggered (Incident
+ * captures its own independent title/description/timeline at creation time,
+ * it doesn't reference the row that caused it), so this job cannot ask "is
+ * this exact row linked to a still-open incident?" via a real join.
+ *
+ * The safe, conservative behavior instead: never delete any SecurityEvent
+ * row created on/after the `startedAt` of the OLDEST currently-open
+ * (non-RESOLVED) Incident. The effective cutoff is whichever is EARLIER —
+ * the normal SECURITY_EVENT_RETENTION_DAYS-day age cutoff, or that
+ * incident's start — so the entire time window during which any incident
+ * has been under active investigation is preserved regardless of age, even
+ * if that means retaining rows longer than the normal window.
+ */
+async function securityEventRetentionCleanupJob(): Promise<JobRunLog[]> {
+  const ageCutoff = new Date();
+  ageCutoff.setDate(ageCutoff.getDate() - SECURITY_EVENT_RETENTION_DAYS);
+
+  const oldestOpenIncident = await prisma.incident.findFirst({
+    where: { status: { not: "RESOLVED" } },
+    orderBy: { startedAt: "asc" },
+    select: { startedAt: true },
+  });
+
+  const cutoff = oldestOpenIncident && oldestOpenIncident.startedAt < ageCutoff ? oldestOpenIncident.startedAt : ageCutoff;
+
+  const result = await prisma.securityEvent.deleteMany({ where: { createdAt: { lt: cutoff } } });
+  return [
+    {
+      level: "info",
+      message: oldestOpenIncident
+        ? `Pruned ${result.count} SecurityEvent row(s) older than ${cutoff.toISOString()} (clamped to the oldest still-open Incident's start).`
+        : `Pruned ${result.count} SecurityEvent row(s) older than ${SECURITY_EVENT_RETENTION_DAYS} days.`,
+    },
+  ];
+}
+
+/**
+ * DeviceSession rows with no activity in DEVICE_SESSION_INACTIVE_RETENTION_
+ * DAYS+ days are abandoned/expired sessions, not meaningful security
+ * history. Scoped by `lastActiveAt` (refreshed on real activity), never by
+ * `createdAt` — an old session that's still genuinely in use is never
+ * touched.
+ */
+async function deviceSessionRetentionCleanupJob(): Promise<JobRunLog[]> {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - DEVICE_SESSION_INACTIVE_RETENTION_DAYS);
+  const result = await prisma.deviceSession.deleteMany({ where: { lastActiveAt: { lt: cutoff } } });
+  return [{ level: "info", message: `Pruned ${result.count} DeviceSession row(s) inactive for more than ${DEVICE_SESSION_INACTIVE_RETENTION_DAYS} days.` }];
+}
+
+/**
+ * Backup metadata rows — and the real backup FILES they point at via
+ * Backup.storageKey (a real relative path under storage/backups/, written
+ * by scripts/backup-database.sh / backup-storage.sh and recorded by
+ * runBackupScript in src/lib/ops/run-backup-script.ts) — are deliberately
+ * NOT pruned by any automated job. An unattended job with a scoping bug
+ * (or a retention window set too aggressively) could silently delete
+ * unrecoverable disaster-recovery backups, defeating the entire point of
+ * having them. That gap is intentional and documented (see
+ * checkDataRetentionPolicy in src/lib/security/compliance.ts) — real backup
+ * file/row pruning is left as a human-supervised manual/future step, not
+ * something this job takes on.
+ *
+ * What IS safe to prune automatically: Restore rows where `isTest` is true
+ * — the pure verification records the weekly-restore-test job
+ * (src/lib/ops/restore-test.ts) produces every run. These carry no unique
+ * data of their own (the Backup row/file they tested is untouched by this
+ * job), and a real production restore (`isTest: false`) never matches this
+ * filter, so genuine disaster-recovery history is never pruned.
+ */
+async function restoreTestRetentionCleanupJob(): Promise<JobRunLog[]> {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - RESTORE_TEST_RETENTION_DAYS);
+  const result = await prisma.restore.deleteMany({ where: { isTest: true, startedAt: { lt: cutoff } } });
+  return [{ level: "info", message: `Pruned ${result.count} restore-test Restore row(s) older than ${RESTORE_TEST_RETENTION_DAYS} days.` }];
 }
 
 /**
@@ -526,6 +875,29 @@ async function healthSnapshotJob(): Promise<JobRunLog[]> {
   ];
 }
 
+async function leadDiscoveryJob(): Promise<JobRunLog[]> {
+  if (!isAIConnected()) return [{ level: "warn", message: "Skipped — no AI provider configured." }];
+  const summaries = await runLeadDiscoveryForAllOrganizations();
+  return summaries.map((s) =>
+    s.skippedReason
+      ? { level: "info", message: `Skipped: ${s.skippedReason}.`, organizationId: s.organizationId }
+      : {
+          level: "info",
+          message: `${s.queriesRun} quer${s.queriesRun === 1 ? "y" : "ies"} run, ${s.companiesFound} new lead${s.companiesFound === 1 ? "" : "s"} found, ${s.duplicatesSkipped} duplicate${s.duplicatesSkipped === 1 ? "" : "s"} skipped.`,
+          organizationId: s.organizationId,
+        },
+  );
+}
+
+async function companyResearchBacklogJob(): Promise<JobRunLog[]> {
+  const summaries = await runCompanyResearchBacklog();
+  return summaries.map((s) =>
+    s.skippedReason
+      ? { level: "warn", message: `Skipped: ${s.skippedReason}.` }
+      : { level: "info", message: `${s.processed} companies researched, ${s.failed} failed.`, organizationId: s.organizationId },
+  );
+}
+
 export const JOB_DEFINITIONS: JobDefinition[] = [
   {
     key: "daily-metric-snapshot",
@@ -564,6 +936,30 @@ export const JOB_DEFINITIONS: JobDefinition[] = [
     name: "Audit log retention cleanup",
     cronExpression: "0 2 * * 0",
     handler: auditLogRetentionCleanupJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 5, // weekly bulk deletion housekeeping — lowest priority, no user waits on it
+  },
+  {
+    key: "security-event-retention-cleanup",
+    name: "Security event retention cleanup",
+    cronExpression: "0 4 * * 0",
+    handler: securityEventRetentionCleanupJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 5, // weekly bulk deletion housekeeping, same tier as audit-log-retention-cleanup
+  },
+  {
+    key: "device-session-retention-cleanup",
+    name: "Inactive device session cleanup",
+    cronExpression: "30 4 * * 0",
+    handler: deviceSessionRetentionCleanupJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 5, // weekly bulk deletion housekeeping — lowest priority, no user waits on it
+  },
+  {
+    key: "restore-test-retention-cleanup",
+    name: "Restore-test metadata retention cleanup",
+    cronExpression: "0 5 * * 0",
+    handler: restoreTestRetentionCleanupJob,
     retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
     priority: 5, // weekly bulk deletion housekeeping — lowest priority, no user waits on it
   },
@@ -622,5 +1018,125 @@ export const JOB_DEFINITIONS: JobDefinition[] = [
     handler: healthSnapshotJob,
     retryPolicy: { maxAttempts: 1, backoffMs: 0 }, // a missed snapshot is fine — the next run in 5 minutes covers it, no point retrying a stale check
     priority: 2, // frequent (every 5 min) and feeds real-time alerting/uptime history — high urgency, just below the strictly real-time user-facing jobs
+  },
+  {
+    key: "lead-discovery",
+    name: "Autonomous lead discovery",
+    cronExpression: "0 6 * * *",
+    handler: leadDiscoveryJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4, // opt-in, non-urgent — runs before the research/scoring backlog job so newly-found companies have something to process
+  },
+  {
+    key: "company-research-backlog",
+    name: "Company research backlog",
+    cronExpression: "*/30 * * * *",
+    handler: companyResearchBacklogJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4, // opt-in, bounded batch (5 companies/org/run) — steady background progress, not time-critical
+  },
+  {
+    key: "client-health-snapshot",
+    name: "Daily client health snapshot",
+    cronExpression: "45 0 * * *",
+    handler: clientHealthSnapshotJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 30_000 },
+    priority: 5, // nightly derived rollup, same tier as the analytics/project-health snapshots it runs alongside
+  },
+  {
+    key: "growth-score-snapshot",
+    name: "Daily Growth Score snapshot",
+    cronExpression: "0 1 * * *",
+    handler: growthScoreSnapshotJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 30_000 },
+    priority: 5, // nightly derived rollup — runs after client-health-snapshot (0:45) so customerSuccessScore reads today's data
+  },
+  {
+    key: "growth-improvement-plan-refresh",
+    name: "Weekly Growth Improvement Plan refresh",
+    cronExpression: "0 6 * * 1",
+    handler: growthImprovementPlanRefreshJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4, // weekly AI-generated guidance, not time-critical, but real spend so kept off the hourly/daily tiers
+  },
+  {
+    key: "client-churn-assessment",
+    name: "Daily client churn risk assessment",
+    cronExpression: "15 1 * * *",
+    handler: clientChurnAssessmentJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 30_000 },
+    priority: 4, // nightly derived rollup — runs after growth-score-snapshot (1:00) so it reads today's ClientHealthSnapshot
+  },
+  {
+    key: "client-opportunity-scan",
+    name: "Weekly client opportunity scan",
+    cronExpression: "0 7 * * 1",
+    handler: clientOpportunityScanJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4, // weekly, bounded batch (5 never-scanned clients/org/run) — real AI spend for the referral step, not time-critical
+  },
+  {
+    key: "competitor-intelligence-refresh",
+    name: "Weekly competitor intelligence refresh",
+    cronExpression: "0 8 * * 1",
+    handler: competitorIntelligenceRefreshJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4, // weekly, real AI web-search spend per org — bounded cadence, not time-critical
+  },
+  {
+    key: "market-trend-refresh",
+    name: "Monthly market trend refresh",
+    cronExpression: "0 8 1 * *",
+    handler: marketTrendRefreshJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 5, // monthly, real AI web-search spend per org — trends move slower than competitors, so a longer cadence
+  },
+  {
+    key: "executive-insights-refresh",
+    name: "Daily Executive Insights refresh",
+    cronExpression: "0 7 * * 1-5",
+    handler: executiveInsightsRefreshJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 3, // daily, before the 9am AI Executive Board meeting — same tier as other daily AI-generated content
+  },
+  {
+    key: "insight-retention-cleanup",
+    name: "Weekly Insight retention cleanup",
+    cronExpression: "0 3 * * 0",
+    handler: insightRetentionCleanupJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 5, // weekly bulk deletion housekeeping — lowest priority, same tier as audit-log-retention-cleanup
+  },
+  {
+    key: "daily-ceo-brief",
+    name: "AI CEO Daily Brief",
+    cronExpression: "0 6 * * 1-5",
+    handler: dailyCeoBriefJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 3, // daily, before the 9am AI Executive Board meeting — same morning-job ordering convention as executive-insights-refresh
+  },
+  {
+    key: "nightly-database-backup",
+    name: "Nightly database backup",
+    cronExpression: "0 2 * * *",
+    handler: nightlyDatabaseBackupJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 5 * 60_000 },
+    priority: 2, // real RPO-defining job — real data loss risk if this silently stops running, higher priority than derived-data rollups
+  },
+  {
+    key: "weekly-storage-backup",
+    name: "Weekly storage backup",
+    cronExpression: "30 2 * * 0",
+    handler: weeklyStorageBackupJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 5 * 60_000 },
+    priority: 3, // weekly — storage/ changes far less often than the database, doesn't need a nightly cadence
+  },
+  {
+    key: "weekly-restore-test",
+    name: "Weekly restore test",
+    cronExpression: "0 3 * * 0",
+    handler: weeklyRestoreTestJob,
+    retryPolicy: { maxAttempts: 1, backoffMs: 0 },
+    priority: 3, // weekly, 1 hour after nightly-database-backup's 2am run — verifies that same morning's database backup is genuinely restorable (Restore Testing)
   },
 ];

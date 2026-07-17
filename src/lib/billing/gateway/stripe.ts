@@ -42,7 +42,33 @@ export const stripeGateway: PlatformGateway = {
 
   async createCheckoutSession(input: CreateCheckoutSessionInput): Promise<CheckoutSessionResult> {
     const stripe = getClient();
+    const metadata = { organizationId: input.organizationId, billingAccountId: input.billingAccountId, ...input.metadata };
 
+    if (input.mode === "payment") {
+      if (!input.amountCents || !input.currency) throw new Error("Stripe one-time checkout requires amountCents and currency.");
+      const session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        line_items: [
+          {
+            price_data: {
+              currency: input.currency.toLowerCase(),
+              product_data: { name: input.lineItemName ?? "Purchase" },
+              unit_amount: input.amountCents,
+            },
+            quantity: 1,
+          },
+        ],
+        success_url: input.successUrl,
+        cancel_url: input.cancelUrl,
+        ...(input.gatewayCustomerId ? { customer: input.gatewayCustomerId } : { customer_email: input.customerEmail }),
+        client_reference_id: input.organizationId,
+        metadata,
+      });
+      if (!session.url) throw new Error("Stripe checkout session was created without a redirect URL.");
+      return { checkoutUrl: session.url, gatewaySessionId: session.id };
+    }
+
+    if (!input.gatewayPriceId) throw new Error("Stripe subscription checkout requires gatewayPriceId.");
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       line_items: [{ price: input.gatewayPriceId, quantity: 1 }],
@@ -51,7 +77,7 @@ export const stripeGateway: PlatformGateway = {
       ...(input.gatewayCustomerId ? { customer: input.gatewayCustomerId } : { customer_email: input.customerEmail }),
       subscription_data: input.trialDays > 0 ? { trial_period_days: input.trialDays } : undefined,
       client_reference_id: input.organizationId,
-      metadata: { organizationId: input.organizationId, billingAccountId: input.billingAccountId },
+      metadata,
     });
 
     if (!session.url) throw new Error("Stripe checkout session was created without a redirect URL.");
@@ -119,6 +145,11 @@ export const stripeGateway: PlatformGateway = {
           type: "checkout.completed",
           gatewayCustomerId: typeof session.customer === "string" ? session.customer : undefined,
           gatewaySubscriptionId: typeof session.subscription === "string" ? session.subscription : undefined,
+          gatewayPaymentId: typeof session.payment_intent === "string" ? session.payment_intent : undefined,
+          // Only real for mode:"payment" sessions — a subscription-mode session's amount_total isn't the recurring charge amount, so it's left undefined there.
+          amountCents: session.mode === "payment" ? (session.amount_total ?? undefined) : undefined,
+          currency: session.mode === "payment" ? (session.currency ?? undefined) : undefined,
+          metadata: session.metadata ? { ...session.metadata } : undefined,
         };
       }
       case "customer.subscription.created":

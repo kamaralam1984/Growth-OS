@@ -6,11 +6,12 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { checkRateLimitDegradable } from "@/lib/security/rate-limit-distributed";
 import { inviteSchema } from "@/lib/validations/invitation";
 import { sendEmail } from "@/lib/email";
 import { getAppBaseUrl } from "@/lib/outreach/tracking";
 import { checkPlanLimit } from "@/lib/billing/usage-metering";
+import { getWhiteLabelEmailFrom } from "@/lib/white-label/resolve-brand";
 
 const INVITE_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const INVITER_ROLES = new Set(["OWNER", "ADMIN"]);
@@ -45,7 +46,7 @@ export async function inviteTeamMembers(
     throw new Error("You must be signed in to invite teammates.");
   }
 
-  const rate = checkRateLimit(`invite:${userId}`, { limit: 20, windowMs: 15 * 60_000 });
+  const rate = await checkRateLimitDegradable(`invite:${userId}`, { limit: 20, windowMs: 15 * 60_000 });
   if (!rate.allowed) {
     throw new Error("Too many invitations sent recently. Please try again in a few minutes.");
   }
@@ -63,6 +64,8 @@ export async function inviteTeamMembers(
   if (!organization) {
     throw new Error("Organization not found.");
   }
+
+  const emailFrom = await getWhiteLabelEmailFrom(orgId);
 
   // Real plan-limit enforcement — this org's current Plan.userLimit (checked
   // against the real, live ACTIVE-membership count) gates whether it can
@@ -118,6 +121,7 @@ export async function inviteTeamMembers(
         subject: `You're invited to join ${organization.name} on KVL GrowthOS`,
         text: `You've been invited to join ${organization.name} on KVL GrowthOS as ${invite.role}.\n\nAccept your invitation: ${acceptUrl}\n\nThis link expires in 7 days.`,
         html: `<p>You've been invited to join <strong>${organization.name}</strong> on KVL GrowthOS as <strong>${invite.role}</strong>.</p><p><a href="${acceptUrl}">Accept your invitation</a></p><p>This link expires in 7 days.</p>`,
+        from: emailFrom ?? undefined,
       });
 
       await logAudit({

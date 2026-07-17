@@ -1,7 +1,8 @@
 import bcrypt from "bcryptjs";
 
 import { prisma } from "@/lib/prisma";
-import { checkRateLimit, type RateLimitResult } from "@/lib/rate-limit";
+import type { RateLimitResult } from "@/lib/rate-limit";
+import { checkRateLimitDegradable } from "@/lib/security/rate-limit-distributed";
 import type { ApiKeyScope } from "@/lib/auth/api-key-scopes";
 
 export interface ApiKeyAuthResult {
@@ -59,12 +60,14 @@ export function hasApiKeyScope(auth: ApiKeyAuthResult, scope: ApiKeyScope): bool
 }
 
 /**
- * Enforces this key's own `rateLimitPerHour` using the shared in-memory
- * sliding-window limiter, keyed per-ApiKey so one key's traffic can never
- * exhaust another key's budget.
+ * Enforces this key's own `rateLimitPerHour` using the Redis-backed
+ * distributed limiter (falls back to the in-memory one if Redis is
+ * unreachable) — a public API key is exactly the kind of multi-instance
+ * abuse surface checkRateLimitDegradable exists for, keyed per-ApiKey so
+ * one key's traffic can never exhaust another key's budget.
  */
 export async function checkApiKeyRateLimit(auth: ApiKeyAuthResult): Promise<RateLimitResult> {
-  return checkRateLimit(`apikey:${auth.apiKeyId}`, {
+  return checkRateLimitDegradable(`apikey:${auth.apiKeyId}`, {
     limit: auth.rateLimitPerHour,
     windowMs: 3_600_000,
   });

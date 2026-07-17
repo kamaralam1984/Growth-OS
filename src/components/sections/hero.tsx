@@ -13,7 +13,6 @@ import { Button } from "@/components/ui/button";
 import { Container } from "@/components/ui/container";
 import { MagneticButton } from "@/components/ui/magnetic-button";
 import { Spotlight } from "@/components/ui/spotlight";
-import { DashboardPreview } from "@/components/sections/dashboard-preview";
 
 const HEADLINE_LINE_ONE = ["The", "AI", "Workforce", "That"] as const;
 const HEADLINE_LINE_TWO = ["Grows", "Your", "Business", "24/7"] as const;
@@ -103,7 +102,7 @@ function Hero() {
               <RevealLine
                 words={HEADLINE_LINE_TWO}
                 className="block"
-                wordClassName="text-gradient-rosegold"
+                wordClassName="text-gradient-brand"
               />
             </motion.h1>
 
@@ -164,10 +163,6 @@ function Hero() {
           </motion.div>
         </Container>
       </Spotlight>
-
-      <div className="relative mt-16 sm:mt-24">
-        <DashboardPreview />
-      </div>
     </section>
   );
 }

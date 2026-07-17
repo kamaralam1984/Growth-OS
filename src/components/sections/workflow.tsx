@@ -21,7 +21,7 @@ import { Container } from "@/components/ui/container";
 import { EASES } from "@/animations";
 import { cn } from "@/lib/utils";
 
-type Accent = "emerald" | "blue" | "rose" | "amber";
+type Accent = "emerald" | "blue" | "amber";
 
 interface Step {
   icon: LucideIcon;
@@ -33,7 +33,6 @@ interface Step {
 const ACCENT_STYLES: Record<Accent, string> = {
   emerald: "border-emerald-500/20 bg-emerald-500/10 text-emerald-500",
   blue: "border-blue-500/20 bg-blue-500/10 text-blue-500",
-  rose: "border-rose-500/20 bg-rose-500/10 text-rose-500",
   amber: "border-amber-500/20 bg-amber-500/10 text-amber-500",
 };
 
@@ -54,7 +53,7 @@ const STEPS: Step[] = [
   },
   {
     icon: ScanSearch,
-    accent: "rose",
+    accent: "emerald",
     title: "Lead Analysis",
     description:
       "The lead is scored and qualified against your ICP, filtering out poor fits before they reach a rep.",
@@ -82,7 +81,7 @@ const STEPS: Step[] = [
   },
   {
     icon: UserPlus,
-    accent: "rose",
+    accent: "blue",
     title: "LinkedIn Outreach",
     description:
       "Connection requests and follow-up messages go out on LinkedIn to reinforce the email sequence.",

@@ -1,17 +1,32 @@
 import { mkdir, writeFile, unlink, readFile } from "node:fs/promises";
 import path from "node:path";
 
+import { encryptBufferWithKey, decryptBufferWithKey } from "@/lib/crypto/aes-gcm";
+
 /**
  * Shared local-disk file store factory — no S3/Blob credentials exist in
  * this environment. Each caller gets its own subdirectory under
  * <project root>/storage/, never under public/, and files are only ever
- * meant to be read back through an auth-gated route handler. Extracted out
- * of src/lib/storage/documents.ts so the same on-disk save/read/delete
- * logic can be reused for ProjectFileVersion storage (storage/project-files/)
- * without duplicating it.
+ * meant to be read back through an auth-gated route handler (or a signed
+ * URL, see signed-url.ts). Extracted out of src/lib/storage/documents.ts so
+ * the same on-disk save/read/delete logic can be reused for
+ * ProjectFileVersion storage (storage/project-files/) without duplicating it.
+ *
+ * At-rest encryption is opt-in via FILE_STORAGE_ENCRYPTION_KEY: if unset,
+ * behavior is unchanged (plaintext on disk) so existing deployments never
+ * break. If set, every new save() is AES-256-GCM encrypted with a 7-byte
+ * magic prefix ("KVLENC1") so read() can tell an encrypted file from a
+ * pre-existing plaintext one written before the key was configured — never a
+ * destructive rewrite of files already on disk.
  */
+const ENC_MAGIC = Buffer.from("KVLENC1", "ascii");
+
 function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 150) || "file";
+}
+
+function encryptionKey(): string | undefined {
+  return process.env.FILE_STORAGE_ENCRYPTION_KEY;
 }
 
 export interface FileStore {
@@ -39,7 +54,9 @@ export function createFileStore(subdir: string): FileStore {
       const dir = path.join(storageRoot, scopeId);
       await mkdir(dir, { recursive: true });
       const storageKey = path.join(scopeId, `${entityId}-${sanitizeFilename(filename)}`);
-      await writeFile(path.join(storageRoot, storageKey), buffer);
+      const key = encryptionKey();
+      const onDisk = key ? Buffer.concat([ENC_MAGIC, encryptBufferWithKey(buffer, key)]) : buffer;
+      await writeFile(path.join(storageRoot, storageKey), onDisk);
       return storageKey;
     },
 
@@ -48,7 +65,15 @@ export function createFileStore(subdir: string): FileStore {
       if (!isWithinRoot(resolved, storageRoot)) {
         throw new Error("Invalid storage key.");
       }
-      return readFile(resolved);
+      const raw = await readFile(resolved);
+      if (raw.subarray(0, ENC_MAGIC.length).equals(ENC_MAGIC)) {
+        const key = encryptionKey();
+        if (!key) {
+          throw new Error("This file was saved encrypted but FILE_STORAGE_ENCRYPTION_KEY is not set — cannot decrypt.");
+        }
+        return decryptBufferWithKey(raw.subarray(ENC_MAGIC.length), key);
+      }
+      return raw;
     },
 
     async remove(storageKey) {

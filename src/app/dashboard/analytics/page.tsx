@@ -49,13 +49,15 @@ import { GeoWidget } from "./_components/geo-widget";
 import { AnalyticsReportExportMenu } from "./_components/analytics-report-export-menu";
 
 const FORECAST_HORIZONS: Array<{ value: ForecastHorizon; label: string }> = [
+  { value: "day", label: "Day" },
+  { value: "week", label: "Week" },
   { value: "month", label: "Month" },
   { value: "quarter", label: "Quarter" },
   { value: "year", label: "Year" },
 ];
 
 function isForecastHorizon(value: string | undefined): value is ForecastHorizon {
-  return value === "month" || value === "quarter" || value === "year";
+  return value === "day" || value === "week" || value === "month" || value === "quarter" || value === "year";
 }
 
 const BAND_BAR_CLASS: Record<string, string> = {
@@ -648,7 +650,16 @@ export default async function AnalyticsPage({
                 <p className="text-xs text-muted-foreground">Total forecast</p>
                 <p className="text-xl font-semibold text-primary">{formatCurrency(revenueForecast.total, currency)}</p>
               </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Expected closures</p>
+                <p className="text-xl font-semibold text-foreground">{revenueForecast.expectedClosuresCount}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Confidence (deterministic)</p>
+                <p className="text-xl font-semibold text-foreground">{revenueForecast.confidenceScore}/100</p>
+              </div>
             </div>
+            <p className="text-xs text-muted-foreground">{revenueForecast.confidenceFormula}</p>
           </CardContent>
         </Card>
 

@@ -126,9 +126,17 @@ export async function runRestoreTest(backupId: string): Promise<Restore> {
     }
 
     try {
+      // --clean --if-exists: the dump includes an unconditional `CREATE
+      // SCHEMA public;` (pg_dump's default), which collides with the
+      // `public` schema every fresh Postgres database already has —
+      // "schema already exists" without this. --clean emits DROP
+      // statements (schema included) before recreating each object;
+      // --if-exists makes those DROPs a no-op instead of an error on a
+      // truly empty scratch database. Standard practice for restoring a
+      // full-database dump into a freshly createdb'd target.
       const restoreExec = runPg(
         "pg_restore",
-        ["--no-owner", "--no-privileges", "-h", conn.host, "-p", conn.port, "-U", conn.user, "-d", scratchDb, dumpFile],
+        ["--no-owner", "--no-privileges", "--clean", "--if-exists", "-h", conn.host, "-p", conn.port, "-U", conn.user, "-d", scratchDb, dumpFile],
         conn,
       );
       if (!restoreExec.ok) return fail(`pg_restore into scratch database "${scratchDb}" failed: ${restoreExec.stderr}`);

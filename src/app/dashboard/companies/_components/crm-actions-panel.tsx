@@ -91,10 +91,11 @@ export function CrmActionsPanel({ companyId, hasLead, ownerUserId, priority, mem
         </Button>
 
         <div className="flex flex-col gap-1.5">
-          <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          <label htmlFor="crm-owner-select" className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
             <UserCog className="size-3.5" /> Owner
           </label>
           <Select
+            id="crm-owner-select"
             value={ownerUserId ?? ""}
             onChange={(e) => handleAssignOwner(e.target.value)}
             disabled={assigningOwner}
@@ -110,10 +111,11 @@ export function CrmActionsPanel({ companyId, hasLead, ownerUserId, priority, mem
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          {/* Not a form <label> — this heads a group of toggle buttons, not one single control. */}
+          <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
             <Flag className="size-3.5" /> Priority
-          </label>
-          <div className="flex flex-wrap gap-1.5">
+          </span>
+          <div role="group" aria-label="Priority" className="flex flex-wrap gap-1.5">
             {PRIORITY_OPTIONS.map((opt) => (
               <button key={opt} type="button" onClick={() => handleMarkPriority(opt)} disabled={markingPriority}>
                 <Badge variant={priority === opt ? PRIORITY_VARIANT[opt] : "outline"} className={priority === opt ? "" : "opacity-60"}>
@@ -125,16 +127,18 @@ export function CrmActionsPanel({ companyId, hasLead, ownerUserId, priority, mem
         </div>
 
         <form onSubmit={handleCreateTask} className="flex flex-col gap-1.5 border-t border-border pt-3">
-          <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          {/* Not a form <label> — this heads the whole mini-form below (title + assignee + submit), not one single control. */}
+          <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
             <ListChecks className="size-3.5" /> Create task
-          </label>
+          </span>
           <Input
+            aria-label="Task title"
             value={taskTitle}
             onChange={(e) => setTaskTitle(e.target.value)}
             placeholder="Task title"
             className="h-9 text-sm"
           />
-          <Select value={taskAssignee} onChange={(e) => setTaskAssignee(e.target.value)} className="h-9 text-sm">
+          <Select aria-label="Assign task to" value={taskAssignee} onChange={(e) => setTaskAssignee(e.target.value)} className="h-9 text-sm">
             {members.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.name ?? "Unnamed member"}

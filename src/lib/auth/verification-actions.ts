@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
 import { getAppBaseUrl } from "@/lib/outreach/tracking";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { checkRateLimitDegradable } from "@/lib/security/rate-limit-distributed";
 import { issueUserToken } from "@/lib/auth/tokens";
 
 export interface ActionResult {
@@ -29,7 +29,7 @@ export async function resendVerificationEmail(): Promise<ActionResult> {
   const userId = session?.user?.id;
   if (!userId) return { ok: false, error: "You must be signed in." };
 
-  const rate = checkRateLimit(`resend-verification:${userId}`, { limit: 3, windowMs: 15 * 60_000 });
+  const rate = await checkRateLimitDegradable(`resend-verification:${userId}`, { limit: 3, windowMs: 15 * 60_000 });
   if (!rate.allowed) {
     return { ok: false, error: "Too many requests. Please try again in a few minutes." };
   }

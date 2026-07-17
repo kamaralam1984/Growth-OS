@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { forgotPasswordSchema } from "@/lib/validations/auth";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { checkRateLimitDegradable } from "@/lib/security/rate-limit-distributed";
 import { issueUserToken } from "@/lib/auth/tokens";
 import { sendEmail } from "@/lib/email";
 import { getAppBaseUrl } from "@/lib/outreach/tracking";
@@ -17,7 +17,7 @@ function clientIp(request: Request): string {
 // registered emails. The real work (issuing a token + sending an email) only
 // happens when a match is found.
 export async function POST(request: Request) {
-  const rate = checkRateLimit(`forgot-password:${clientIp(request)}`, { limit: 5, windowMs: 15 * 60_000 });
+  const rate = await checkRateLimitDegradable(`forgot-password:${clientIp(request)}`, { limit: 5, windowMs: 15 * 60_000 });
   if (!rate.allowed) {
     return NextResponse.json({ ok: true });
   }

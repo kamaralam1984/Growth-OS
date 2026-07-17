@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { Check, Sparkles } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -75,6 +75,48 @@ function formatLimit(value: number | null, unit = ""): string {
   return value === null ? "Unlimited" : `${value.toLocaleString()}${unit}`;
 }
 
+/**
+ * Purely informational "≈ live rate" aside next to a non-USD plan price —
+ * fetches a real rate from GET /api/billing/exchange-rate (backed by
+ * src/lib/billing/exchange-rates.ts's Frankfurter/ECB integration) and
+ * renders nothing at all if that returns null (unsupported currency, API
+ * down, no network) rather than a stale or fabricated figure. USD is used
+ * as a widely-understood reference currency; this never changes — and is
+ * never read by — the actual charge amount above it.
+ */
+function LiveRateHint({ amountCents, currency }: { amountCents: number; currency: string }) {
+  const [usdAmount, setUsdAmount] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (currency === "USD" || amountCents <= 0) return;
+
+    let cancelled = false;
+    fetch(`/api/billing/exchange-rate?from=${encodeURIComponent(currency)}&to=USD`)
+      .then((res) => (res.ok ? (res.json() as Promise<{ rate: number | null }>) : null))
+      .then((data) => {
+        if (cancelled || !data?.rate) return;
+        setUsdAmount((amountCents / 100) * data.rate);
+      })
+      .catch(() => {
+        // Best-effort informational aside — a failed fetch just means the
+        // hint doesn't render, never a thrown error or a guessed number.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [amountCents, currency]);
+
+  if (usdAmount === null) return null;
+
+  return (
+    <p className="text-xs text-muted-foreground">
+      &asymp; {usdAmount.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 })} USD{" "}
+      <span className="italic">(indicative live rate, not your charge amount)</span>
+    </p>
+  );
+}
+
 export function PlanComparison({ plans, currentPlanId, hasActiveSubscription, configuredGateways, canManage }: PlanComparisonProps) {
   const availableIntervals = useMemo(() => {
     const set = new Set(plans.map((p) => p.interval));
@@ -117,7 +159,7 @@ export function PlanComparison({ plans, currentPlanId, hasActiveSubscription, co
           <Tabs value={interval} onValueChange={(v) => setInterval(v as BillingIntervalUnit)}>
             <TabsList>
               {availableIntervals.map((i) => (
-                <TabsTrigger key={i} value={i}>
+                <TabsTrigger key={i} value={i} hasPanel={false}>
                   {i === "MONTHLY" ? "Monthly" : i === "YEARLY" ? "Yearly" : i}
                 </TabsTrigger>
               ))}
@@ -201,6 +243,7 @@ function PlanCard({
           {plan.priceCents > 0 && (
             <p className="text-xs text-muted-foreground">per {plan.interval === "YEARLY" ? "year" : plan.interval === "QUARTERLY" ? "quarter" : "month"}</p>
           )}
+          {plan.priceCents > 0 && <LiveRateHint amountCents={plan.priceCents} currency={plan.currency} />}
           {plan.trialDays > 0 && <p className="mt-1 text-xs text-primary">{plan.trialDays}-day free trial</p>}
         </div>
 

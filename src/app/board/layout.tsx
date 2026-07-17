@@ -100,7 +100,7 @@ export default async function BoardLayout({ children }: { children: React.ReactN
           </div>
         </Container>
       </header>
-      {children}
+      <main id="main-content">{children}</main>
     </div>
   );
 }

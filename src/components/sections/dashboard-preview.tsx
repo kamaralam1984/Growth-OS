@@ -191,7 +191,7 @@ function DashboardPreview() {
                       </p>
                       <p className="text-xs text-muted-foreground">This week</p>
                     </div>
-                    <div className="flex h-32 items-end justify-between gap-2 sm:gap-3">
+                    <div className="flex h-32 items-end justify-between gap-2 sm:gap-3" aria-hidden="true">
                       {BAR_CHART.map((bar, i) => (
                         <div
                           key={bar.label}
@@ -239,6 +239,7 @@ function DashboardPreview() {
                       viewBox="0 0 100 60"
                       preserveAspectRatio="none"
                       className="h-24 w-full"
+                      aria-hidden="true"
                     >
                       <motion.polyline
                         points={LINE_POINTS}

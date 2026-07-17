@@ -53,9 +53,11 @@ const PLOT_SIZE = SIZE - PADDING * 2;
 export function OpportunityMatrix({ items }: { items: MatrixItem[] }) {
   if (items.length === 0) return null;
 
+  const ariaLabel = `Impact vs effort matrix plotting ${items.length} recommendation${items.length === 1 ? "" : "s"}: ${items.map((item) => item.title).join(", ")}`;
+
   return (
     <div className="flex flex-col items-center gap-2">
-      <svg viewBox={`0 0 ${SIZE} ${SIZE}`} width={SIZE} height={SIZE}>
+      <svg viewBox={`0 0 ${SIZE} ${SIZE}`} width={SIZE} height={SIZE} role="img" aria-label={ariaLabel}>
         <line x1={PADDING} y1={SIZE / 2} x2={SIZE - PADDING} y2={SIZE / 2} stroke="var(--color-border)" strokeWidth={1} />
         <line x1={SIZE / 2} y1={PADDING} x2={SIZE / 2} y2={SIZE - PADDING} stroke="var(--color-border)" strokeWidth={1} />
         <rect x={PADDING} y={PADDING} width={PLOT_SIZE} height={PLOT_SIZE} fill="none" stroke="var(--color-border)" strokeWidth={1} />

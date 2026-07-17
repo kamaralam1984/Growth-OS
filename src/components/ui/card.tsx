@@ -32,6 +32,7 @@ function CardHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement
 
 function CardTitle({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
   return (
+    // eslint-disable-next-line jsx-a11y/heading-has-content -- children come via {...props} at every real call site; the rule can't see that statically on a polymorphic wrapper.
     <h3
       data-slot="card-title"
       className={cn("text-lg font-semibold leading-tight tracking-tight text-foreground", className)}

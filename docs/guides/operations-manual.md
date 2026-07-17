@@ -20,7 +20,53 @@
 
 **Log ingestion:** `src/lib/monitoring/logger.ts` writes structured JSON lines to stdout/stderr (errors/warnings to stderr, everything else to stdout) — designed to be ingested directly by a hosting platform's log drain (Vercel/Render/Fly/Railway all parse plain JSON-line stdout). This is a thin wrapper, not a full logging framework migration — most of the app still uses plain `console.error`/`console.log` outside `src/lib/monitoring/*`.
 
-## 2. Viewing logs and audit trails
+## 2. Prometheus metrics & Grafana dashboard (optional)
+
+**`GET /api/metrics`** (`src/app/api/metrics/route.ts`) is a real Prometheus scrape endpoint, distinct from the public `/api/health` above — it is gated behind `METRICS_TOKEN` (`.env.example`, unset by default) and honestly returns `503 { error: "Metrics endpoint not configured..." }` until that's set, rather than being wide open. Once set, send it back as either the `x-metrics-token` header or a `?token=` query param (Prometheus's own `bearer_token`/`params` scrape-config options support either). `src/lib/monitoring/metrics.ts` registers 9 real gauges, freshly computed on every scrape via prom-client's `collect()` hook (never cached/fabricated):
+
+| Metric | Labels | Source |
+|---|---|---|
+| `kvl_system_load_average` | `interval` (`1m`/`5m`/`15m`) | `os.loadavg()` |
+| `kvl_system_cpu_count` | — | `os.cpus().length` |
+| `kvl_system_memory_bytes` | `state` (`total`/`free`) | `os.totalmem()`/`os.freemem()` |
+| `kvl_process_memory_bytes` | `type` (`rss`/`heap_total`/`heap_used`/`external`/`array_buffers`) | `process.memoryUsage()` |
+| `kvl_process_uptime_seconds` | — | `process.uptime()` |
+| `kvl_queue_jobs` | `queue` (`scheduler`/`workflow`/`rag`/`billing`), `state` (`active`/`waiting`/`delayed`/`completed`/`failed`) | The same `getQueueStats`/`getWorkflowQueueStats`/`getRagQueueStats`/`getRecurringBillingQueueStats` getters `/api/health` already calls |
+| `kvl_api_requests_recent_total` | — | `COUNT(*)` of `APIUsage` rows in a trailing 5-minute window |
+| `kvl_api_error_rate` | — | Fraction (0-1) of that window's rows with `statusCode >= 400` |
+| `kvl_api_avg_response_time_ms` | — | `AVG(APIUsage.responseTimeMs)` over the same window |
+
+There is deliberately no latency-histogram/counter metric here — all 9 are gauges — so a real Grafana dashboard against this endpoint graphs `kvl_api_avg_response_time_ms` directly rather than `histogram_quantile()`, and graphs the two `_recent_total`/`_error_rate` gauges as-is rather than wrapping them in `rate()`/`increase()` (they are already trailing-window aggregates, not monotonic counters).
+
+**Dashboard-as-code** (real, valid Grafana JSON — but never rendered against a live Grafana in the environment it was authored in; treat it as reviewed config, not a verified screenshot):
+
+- `monitoring/grafana/dashboards/kvl-growthos-overview.json` — the dashboard itself. Every panel's `targets[].expr` queries one of the 9 metric names above; none were invented.
+- `monitoring/grafana/provisioning/datasources.yml` — provisions a `Prometheus` datasource at `http://prometheus:9090`.
+- `monitoring/grafana/provisioning/dashboards.yml` — auto-loads the dashboard file above on Grafana startup.
+
+**Honest gap:** `docker-compose.yml` at the repo root defines only `app`/`postgres`/`redis` as of this writing — there is no `prometheus` or `grafana` service in it, and none was added by this pass (the existing file's `ports`/network comments reflect careful, deliberate avoidance of port collisions with other services already running on this host, so adding services there was judged too risky to do blind). To actually use this dashboard, run your own Prometheus + Grafana (e.g. via a separate compose file, or plain `docker run`) and point Prometheus at this app's real `/api/metrics` with the token configured:
+
+```bash
+# Prometheus scrape config (prometheus.yml), assuming METRICS_TOKEN is set:
+scrape_configs:
+  - job_name: kvl-growthos
+    scrape_interval: 30s
+    params:
+      token: ["<your METRICS_TOKEN value>"]
+    static_configs:
+      - targets: ["<app host>:<APP_HOST_PORT>"]
+
+# Grafana, provisioned with the files in this repo:
+docker run -d --name grafana -p 3001:3000 \
+  -v "$(pwd)/monitoring/grafana/provisioning:/etc/grafana/provisioning" \
+  -v "$(pwd)/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards/kvl-growthos" \
+  --network <the docker network your Prometheus container is on> \
+  grafana/grafana:latest
+```
+
+Adjust `datasources.yml`'s `url` if your Prometheus isn't reachable at `http://prometheus:9090` on that network (e.g. `host.docker.internal:9090` for a Prometheus running directly on the host rather than in a container).
+
+## 3. Viewing logs and audit trails
 
 Three real, queryable trails exist, at different scopes:
 
@@ -70,7 +116,7 @@ await prisma.auditLog.findMany({
 
 As of this writing, no dedicated `/admin/incidents` (or `/admin/security`) page had landed to surface `Incident`/`SecurityEvent` in-app — see `docs/guides/admin-manual.md` for what admin tooling actually exists today, and re-check for a newly-landed page before defaulting to Prisma Studio.
 
-## 3. Rotating a compromised secret / encryption key
+## 4. Rotating a compromised secret / encryption key
 
 There are **four independent AES-256-GCM key domains** (see `docs/guides/security-guide.md` §4) — rotating one never breaks the others by design. Each is a 64-character hex string (32 bytes), generated with `openssl rand -hex 32`. The real rotation procedure differs per domain because each protects different data with different re-encryption needs:
 
@@ -94,7 +140,7 @@ Protects Automation Workflow outbound webhook signing secrets. Rotating without 
 
 **General principle across all four:** never delete the old key from the environment until you have confirmed (by running the migration script, not by assumption) that every row it protects has been re-encrypted under the new key. Keep the old key available (e.g., in a separate secret store, not in the live `.env`) until that migration is verified complete.
 
-## 4. Handling a stuck / failed BullMQ job
+## 5. Handling a stuck / failed BullMQ job
 
 The real Dead Letter Queue UI lives at **`/dashboard/settings/jobs`** (`src/app/dashboard/settings/jobs/page.tsx`), gated by `requireActiveMembership` at the page level and further restricted to `OWNER`/`ADMIN` roles for actual mutations (`requirePrivileged()` in `src/app/dashboard/settings/jobs/actions.ts`). It shows, live:
 
@@ -112,7 +158,7 @@ Real actions available from that page (all in `src/app/dashboard/settings/jobs/a
 
 This UI only covers the generic `kvl-scheduler` queue (the `SchedulerProvider` abstraction). The other 4 real BullMQ queues (`kvl-workflow-execution`, `kvl-webhook-delivery`, `kvl-rag-embedding`, `kvl-billing-recurring` — see `docs/architecture/system-architecture.md` §5) each expose their own `getXQueueStats()`-style function (e.g. `getWorkflowQueueStats` in `src/lib/workflows/engine.ts`, `getRagQueueStats` in `src/lib/rag/embedding-queue.ts`, `getRecurringBillingQueueStats` in `src/lib/billing/recurring-billing-queue.ts`) — these feed `/api/health`'s per-queue `DEGRADED` status, but as of this writing **do not** have their own dedicated dead-letter/retry UI the way the scheduler queue does. For those, a stuck job today requires either direct BullMQ CLI/Redis inspection (queue name is the string constant in each file, e.g. `kvl-rag-embedding`) or a one-off script calling that queue's own retry/discard logic.
 
-## 5. Backups
+## 6. Backups
 
 Real backup tooling landed under `scripts/` during this documentation pass:
 
@@ -122,11 +168,11 @@ Real backup tooling landed under `scripts/` during this documentation pass:
 
 Run these on a schedule (cron/systemd timer/hosting-platform scheduled job) pointed at `DATABASE_URL` for the database script; the storage script needs no env var beyond an optional `BACKUP_DIR` override. Verify restore periodically — as of this writing, check `scripts/` for a `run-restore-test.ts` or equivalent (`scripts/backup-database.sh`'s own comment references `scripts/run-restore-test.ts` as a planned consumer of its `.dump.gz` output via `pg_restore`) before assuming an automated restore-verification path exists.
 
-## 6. Disaster recovery
+## 7. Disaster recovery
 
-A full disaster-recovery runbook landed at `docs/operations/disaster-recovery.md` from the parallel monitoring/DR task during this documentation pass — it is the authoritative source for RTO/RPO targets and restore procedures (it states its RPO honestly as "however long since the last `SUCCEEDED` `Backup` row," since this deployment runs manual/cron-triggered backups rather than continuous WAL streaming as of this writing) and references real tooling (`scripts/run-restore-test.ts`, `src/lib/ops/restore-test.ts`) beyond what §5 above covers. Defer to that document for anything beyond the day-2 backup-invocation basics in §5.
+A full disaster-recovery runbook landed at `docs/operations/disaster-recovery.md` from the parallel monitoring/DR task during this documentation pass — it is the authoritative source for RTO/RPO targets and restore procedures (it states its RPO honestly as "however long since the last `SUCCEEDED` `Backup` row," since this deployment runs manual/cron-triggered backups rather than continuous WAL streaming as of this writing) and references real tooling (`scripts/run-restore-test.ts`, `src/lib/ops/restore-test.ts`) beyond what §6 above covers. Defer to that document for anything beyond the day-2 backup-invocation basics in §6.
 
-## 7. What this document could not confirm as of this writing
+## 8. What this document could not confirm as of this writing
 
 - Whether an admin UI for `ComplianceReport` existed yet — not found as of this writing (see `docs/guides/admin-manual.md`).
 - Whether `PLATFORM_ALERTS_SLACK_WEBHOOK_URL` / `PLATFORM_ALERTS_TEAMS_WEBHOOK_URL` (referenced in `src/lib/monitoring/alerts.ts` as "new env vars added for" platform-wide infra alerting) had been added to `.env.example` yet — a direct grep of `.env.example` at the time of writing found no match. Confirm before assuming they're documented there; set them directly in your environment regardless if you want platform-wide Slack/Teams alerting.

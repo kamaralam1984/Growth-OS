@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs";
+import bundleAnalyzer from "@next/bundle-analyzer";
 
 const nextConfig: NextConfig = {
   // pdfkit reads its .afm font files from disk relative to its own package
@@ -48,6 +49,12 @@ const nextConfig: NextConfig = {
   },
 };
 
+// Real bundle-size inspection (Phase 20 performance work) — opt-in via
+// ANALYZE=true so a normal `next build` never pays the extra
+// analysis/report-generation cost. Usage: `ANALYZE=true npm run build`,
+// which opens a real, generated treemap of the actual production bundle.
+const withBundleAnalyzer = bundleAnalyzer({ enabled: process.env.ANALYZE === "true" });
+
 // withSentryConfig is safe to apply unconditionally — it only actually does
 // anything (source map upload, build annotation) when real Sentry
 // credentials are present; `silent: true` and the sourcemaps.disable guard
@@ -56,7 +63,7 @@ const nextConfig: NextConfig = {
 // see .env.example). It never affects whether the app itself reports errors
 // to Sentry at runtime — that's gated purely on SENTRY_DSN in
 // sentry.server.config.ts / sentry.edge.config.ts / src/instrumentation-client.ts.
-export default withSentryConfig(nextConfig, {
+export default withSentryConfig(withBundleAnalyzer(nextConfig), {
   org: process.env.SENTRY_ORG,
   project: process.env.SENTRY_PROJECT,
   authToken: process.env.SENTRY_AUTH_TOKEN,

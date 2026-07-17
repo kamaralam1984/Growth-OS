@@ -105,6 +105,7 @@ export async function startCheckout(input: StartCheckoutInput): Promise<StartChe
       organizationId: input.organizationId,
       billingAccountId: billingAccount.id,
       gatewayCustomerId: billingAccount.gatewayCustomerId,
+      mode: "subscription",
       gatewayPriceId,
       customerEmail,
       successUrl: input.successUrl,
@@ -630,6 +631,18 @@ export async function handleGatewayWebhookEvent(provider: PaymentGatewayProvider
       return;
     }
     await setCached(dedupKey, true, PROCESSED_EVENT_TTL_SECONDS);
+
+    // Metadata-first branch (Phase 19: paid marketplace listings) — a
+    // marketplace order's checkout carries real, gateway-echoed metadata
+    // (kind: "marketplace_order"), so it's routed to marketplace
+    // fulfillment instead of the BillingAccount-oriented switch below.
+    // Lazy import avoids a circular dependency (checkout.ts doesn't import
+    // this file at module scope).
+    if (event.metadata?.kind === "marketplace_order") {
+      const { handleMarketplaceOrderWebhookEvent } = await import("@/lib/marketplace/checkout");
+      await handleMarketplaceOrderWebhookEvent(provider, event);
+      return;
+    }
 
     switch (event.type) {
       case "checkout.completed":

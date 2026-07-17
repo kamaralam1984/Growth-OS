@@ -55,3 +55,7 @@ next-env.d.ts
 
 # generated a11y audit reports (scripts/a11y-audit.ts) — regenerate anytime, never checked in
 /storage/a11y-reports
+
+# real database dumps produced by scripts/backup-database.sh — never checked in
+# (this repo is public; a committed dump would leak real data)
+/storage/backups

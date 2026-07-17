@@ -52,7 +52,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         <aside className="hidden w-60 shrink-0 border-r border-border lg:block">
           <AdminSidebar />
         </aside>
-        <main className="min-w-0 flex-1">{children}</main>
+        <main id="main-content" className="min-w-0 flex-1">{children}</main>
       </div>
     </div>
   );

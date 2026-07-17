@@ -40,9 +40,11 @@ export function Treemap({ nodes, formatValue }: { nodes: TreemapNode[]; formatVa
 
   const sorted = [...nodes].sort((a, b) => b.value - a.value);
   const rects = slice(sorted, 0, 0, width, height, true);
+  const top = sorted[0];
+  const ariaLabel = `Treemap of ${nodes.length} item${nodes.length === 1 ? "" : "s"} totaling ${formatValue(total)}; largest is ${top.label} at ${formatValue(top.value)}`;
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="h-auto w-full" role="img">
+    <svg viewBox={`0 0 ${width} ${height}`} className="h-auto w-full" role="img" aria-label={ariaLabel}>
       {rects.map((r, i) => (
         <g key={r.item.label}>
           <rect

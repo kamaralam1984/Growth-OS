@@ -66,13 +66,38 @@ export const paddleGateway: PlatformGateway = {
   isConfigured,
 
   async createCheckoutSession(input: CreateCheckoutSessionInput): Promise<CheckoutSessionResult> {
+    const customData = { organizationId: input.organizationId, billingAccountId: input.billingAccountId, ...input.metadata };
+
+    // One-time payments use Paddle's real support for a non-catalog inline
+    // price on a Transaction — no pre-created Price object required, unlike
+    // the gatewayPriceId-based subscription path below.
+    const items =
+      input.mode === "payment"
+        ? (() => {
+            if (!input.amountCents || !input.currency) throw new Error("Paddle one-time checkout requires amountCents and currency.");
+            return [
+              {
+                price: {
+                  description: input.lineItemName ?? "Purchase",
+                  name: input.lineItemName ?? "Purchase",
+                  unit_price: { amount: String(input.amountCents), currency_code: input.currency.toUpperCase() },
+                },
+                quantity: 1,
+              },
+            ];
+          })()
+        : (() => {
+            if (!input.gatewayPriceId) throw new Error("Paddle subscription checkout requires gatewayPriceId.");
+            return [{ price_id: input.gatewayPriceId, quantity: 1 }];
+          })();
+
     const response = await fetch(`${apiBase()}/transactions`, {
       method: "POST",
       headers: { Authorization: authHeader(), "Content-Type": "application/json" },
       body: JSON.stringify({
-        items: [{ price_id: input.gatewayPriceId, quantity: 1 }],
+        items,
         ...(input.gatewayCustomerId ? { customer_id: input.gatewayCustomerId } : {}),
-        custom_data: { organizationId: input.organizationId, billingAccountId: input.billingAccountId },
+        custom_data: customData,
         checkout: { url: input.successUrl },
       }),
     });
@@ -155,7 +180,14 @@ export const paddleGateway: PlatformGateway = {
     }
 
     const base = { gatewayEventId: payload.event_id, raw: payload };
-    const data = payload.data as Partial<PaddleSubscription> & { id?: string; subscription_id?: string; amount?: string; currency_code?: string };
+    const data = payload.data as Partial<PaddleSubscription> & {
+      id?: string;
+      subscription_id?: string;
+      amount?: string;
+      currency_code?: string;
+      custom_data?: Record<string, string>;
+      details?: { totals?: { total?: string } };
+    };
 
     switch (payload.event_type) {
       case "subscription.created":
@@ -179,7 +211,21 @@ export const paddleGateway: PlatformGateway = {
       case "subscription.canceled":
         return { ...base, type: "subscription.canceled", gatewaySubscriptionId: data.id };
       case "transaction.paid":
-        return { ...base, type: "invoice.paid", gatewayInvoiceId: data.id, gatewaySubscriptionId: data.subscription_id, currency: data.currency_code };
+        return {
+          ...base,
+          // A transaction with no subscription_id is a real one-time
+          // marketplace purchase, not a recurring invoice — surfaced as
+          // "checkout.completed" so it's routed the same way the
+          // subscription-mode checkout.completed event is, never mistaken
+          // for a subscription renewal.
+          type: data.subscription_id ? "invoice.paid" : "checkout.completed",
+          gatewayInvoiceId: data.id,
+          gatewayPaymentId: data.id,
+          gatewaySubscriptionId: data.subscription_id,
+          currency: data.currency_code,
+          amountCents: data.details?.totals?.total ? Number(data.details.totals.total) : undefined,
+          metadata: data.custom_data,
+        };
       case "transaction.payment_failed":
         return {
           ...base,

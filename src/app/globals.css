@@ -241,22 +241,6 @@
     color: var(--primary);
   }
 
-  /* Real two-color gradient (rose -> warm gold -> rose), not a flat color
-     despite the name irony of .text-gradient-brand above (that one is
-     solid). Used for the hero headline's emphasis line — the literal
-     "rose gold" pairing the luxury palette is built around. */
-  .text-gradient-rosegold {
-    background: linear-gradient(
-      100deg,
-      var(--color-rose-400) 8%,
-      var(--color-amber-300) 52%,
-      var(--color-rose-300) 96%
-    );
-    background-clip: text;
-    -webkit-background-clip: text;
-    color: transparent;
-  }
-
   .bg-grid {
     background-image:
       linear-gradient(color-mix(in srgb, white 4%, transparent) 1px, transparent 1px),
