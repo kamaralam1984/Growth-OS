@@ -64,8 +64,15 @@ services:
     # exist yet as of this file being written — this points at its
     # documented contract (GET /api/health -> 200 healthy / 503 degraded).
     # If it isn't merged yet, swap the path back to "/" temporarily.
+    #
+    # "127.0.0.1", not "localhost": this image's server only binds IPv4
+    # (HOSTNAME=0.0.0.0 in the Dockerfile), but Alpine's wget resolves
+    # "localhost" to the IPv6 loopback (::1) first and doesn't fall back —
+    # that made every check fail with "connection refused" against a
+    # perfectly healthy server (confirmed via `ss -tlnp` showing only a
+    # 0.0.0.0:3000 listener, no ::3000).
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3
