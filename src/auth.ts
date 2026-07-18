@@ -10,6 +10,7 @@ import { PrismaAdapter } from "@auth/prisma-adapter";
 import { verify as verifyTotp } from "otplib";
 
 import { prisma } from "@/lib/prisma";
+import { getEnabledOAuthProviders } from "@/lib/auth/oauth-providers";
 import { recordDeviceSession } from "@/lib/device-session";
 import { checkRateLimitDegradable } from "@/lib/security/rate-limit-distributed";
 import { verifyPassword, rehashIfNeeded } from "@/lib/auth/password";
@@ -83,25 +84,28 @@ function clientIp(request: Request): string {
 
 /**
  * Every OAuth provider below is only pushed into the `providers` array when
- * its client id/secret env vars are actually present. This lets the app
- * build and run today with ZERO OAuth env vars configured (no login buttons
- * for these render), and "just work" the moment real credentials are added
- * to the environment later — no code changes needed.
+ * its client id/secret env vars are actually present (per getEnabledOAuthProviders,
+ * the same check the login/register pages use to decide which "Sign in with
+ * X" button to render). This lets the app build and run today with ZERO
+ * OAuth env vars configured (no login buttons for these render), and "just
+ * work" the moment real credentials are added to the environment later — no
+ * code changes needed.
  */
+const enabledOAuthProviders = getEnabledOAuthProviders();
 const oauthProviders = [
-  ...(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
+  ...(enabledOAuthProviders.google
     ? [
         Google({
-          clientId: process.env.GOOGLE_CLIENT_ID,
-          clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+          clientId: process.env.GOOGLE_CLIENT_ID!,
+          clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
         }),
       ]
     : []),
-  ...(process.env.MICROSOFT_ENTRA_ID_CLIENT_ID && process.env.MICROSOFT_ENTRA_ID_CLIENT_SECRET
+  ...(enabledOAuthProviders.microsoftEntraId
     ? [
         MicrosoftEntraID({
-          clientId: process.env.MICROSOFT_ENTRA_ID_CLIENT_ID,
-          clientSecret: process.env.MICROSOFT_ENTRA_ID_CLIENT_SECRET,
+          clientId: process.env.MICROSOFT_ENTRA_ID_CLIENT_ID!,
+          clientSecret: process.env.MICROSOFT_ENTRA_ID_CLIENT_SECRET!,
           // Optional — omitted, defaults to the multi-tenant "common" issuer
           // which allows any Microsoft account (personal/school/work) to sign in.
           ...(process.env.MICROSOFT_ENTRA_ID_TENANT_ID
@@ -112,11 +116,11 @@ const oauthProviders = [
         }),
       ]
     : []),
-  ...(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET
+  ...(enabledOAuthProviders.github
     ? [
         GitHub({
-          clientId: process.env.GITHUB_CLIENT_ID,
-          clientSecret: process.env.GITHUB_CLIENT_SECRET,
+          clientId: process.env.GITHUB_CLIENT_ID!,
+          clientSecret: process.env.GITHUB_CLIENT_SECRET!,
         }),
       ]
     : []),

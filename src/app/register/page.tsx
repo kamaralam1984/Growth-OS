@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 
 import { PublicBrandHeader, brandThemeStyle } from "@/components/brand/public-brand-header";
 import { resolveBrandByHost } from "@/lib/white-label/resolve-brand";
+import { getEnabledOAuthProviders } from "@/lib/auth/oauth-providers";
 import { RegisterForm } from "./_components/register-form";
 
 /**
@@ -23,7 +24,7 @@ export default async function RegisterPage() {
     >
       <PublicBrandHeader branding={branding} />
       <Suspense fallback={null}>
-        <RegisterForm branding={branding} />
+        <RegisterForm branding={branding} oauthProviders={getEnabledOAuthProviders()} />
       </Suspense>
     </main>
   );

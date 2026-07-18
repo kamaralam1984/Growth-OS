@@ -11,9 +11,11 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { FormField } from "@/components/ui/form-field";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { fadeInUp } from "@/animations";
 import { COMMON_COUNTRIES, COMMON_LANGUAGES } from "@/lib/constants/onboarding";
 import type { EffectiveBranding } from "@/lib/white-label/resolve-brand";
+import type { EnabledOAuthProviders } from "@/lib/auth/oauth-providers";
 import { PasswordStrengthMeter } from "./password-strength-meter";
 
 interface FormState {
@@ -51,7 +53,13 @@ function safeCallbackUrl(raw: string | null): string | null {
   return raw;
 }
 
-export function RegisterForm({ branding }: { branding: EffectiveBranding }) {
+export function RegisterForm({
+  branding,
+  oauthProviders,
+}: {
+  branding: EffectiveBranding;
+  oauthProviders: EnabledOAuthProviders;
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const callbackUrl = safeCallbackUrl(searchParams.get("callbackUrl"));
@@ -251,6 +259,9 @@ export function RegisterForm({ branding }: { branding: EffectiveBranding }) {
               {loading ? "Creating account..." : "Create account"}
             </Button>
           </form>
+          <div className="mt-6">
+            <OAuthButtons providers={oauthProviders} callbackUrl={callbackUrl} />
+          </div>
           <p className="mt-6 text-center text-sm text-muted-foreground">
             Already have an account?{" "}
             <Link
