@@ -39,6 +39,18 @@ services:
       # never directly from the internet, so Auth.js can safely trust the
       # X-Forwarded-Host header the proxy sets.
       AUTH_TRUST_HOST: "true"
+      # OAuth login providers (src/auth.ts / src/lib/auth/oauth-providers.ts).
+      # Each "Sign in with X" button only appears once its own pair of env
+      # vars below is actually set — none configured is a fully valid state.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      MICROSOFT_ENTRA_ID_CLIENT_ID: ${MICROSOFT_ENTRA_ID_CLIENT_ID:-}
+      MICROSOFT_ENTRA_ID_CLIENT_SECRET: ${MICROSOFT_ENTRA_ID_CLIENT_SECRET:-}
+      MICROSOFT_ENTRA_ID_TENANT_ID: ${MICROSOFT_ENTRA_ID_TENANT_ID:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
+      LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
       # The 5 independent AES-256-GCM key domains — see .env.example for what
       # each protects. All optional: each feature honestly degrades to
       # "not configured" until its own key is set, same as running without

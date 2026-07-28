@@ -4,6 +4,7 @@ import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
 import GitHub from "next-auth/providers/github";
+import LinkedIn from "next-auth/providers/linkedin";
 import Nodemailer from "next-auth/providers/nodemailer";
 import { encode as defaultJwtEncode } from "next-auth/jwt";
 import { PrismaAdapter } from "@auth/prisma-adapter";
@@ -121,6 +122,14 @@ const oauthProviders = [
         GitHub({
           clientId: process.env.GITHUB_CLIENT_ID!,
           clientSecret: process.env.GITHUB_CLIENT_SECRET!,
+        }),
+      ]
+    : []),
+  ...(enabledOAuthProviders.linkedin
+    ? [
+        LinkedIn({
+          clientId: process.env.LINKEDIN_CLIENT_ID!,
+          clientSecret: process.env.LINKEDIN_CLIENT_SECRET!,
         }),
       ]
     : []),

@@ -3,7 +3,7 @@
 import { signIn } from "next-auth/react";
 
 import { Button } from "@/components/ui/button";
-import { GoogleIcon, MicrosoftIcon, GitHubIcon } from "@/components/icons/oauth-icons";
+import { GoogleIcon, MicrosoftIcon, GitHubIcon, LinkedInIcon } from "@/components/icons/oauth-icons";
 import type { EnabledOAuthProviders } from "@/lib/auth/oauth-providers";
 
 /**
@@ -20,7 +20,7 @@ export function OAuthButtons({
   providers: EnabledOAuthProviders;
   callbackUrl?: string | null;
 }) {
-  const hasAny = providers.google || providers.microsoftEntraId || providers.github;
+  const hasAny = providers.google || providers.microsoftEntraId || providers.github || providers.linkedin;
   if (!hasAny) return null;
 
   return (
@@ -62,6 +62,17 @@ export function OAuthButtons({
           >
             <GitHubIcon className="size-4" />
             GitHub
+          </Button>
+        )}
+        {providers.linkedin && (
+          <Button
+            type="button"
+            variant="outline"
+            className="flex-1"
+            onClick={() => signIn("linkedin", { callbackUrl: callbackUrl ?? "/dashboard" })}
+          >
+            <LinkedInIcon className="size-4" />
+            LinkedIn
           </Button>
         )}
       </div>

@@ -17,12 +17,14 @@ const PROVIDER_LABELS: Record<string, string> = {
   google: "Google",
   "microsoft-entra-id": "Microsoft",
   github: "GitHub",
+  linkedin: "LinkedIn",
 };
 
 const CONNECT_OPTIONS = [
   { provider: "google", label: "Google", enabledKey: "google" },
   { provider: "microsoft-entra-id", label: "Microsoft", enabledKey: "microsoftEntraId" },
   { provider: "github", label: "GitHub", enabledKey: "github" },
+  { provider: "linkedin", label: "LinkedIn", enabledKey: "linkedin" },
 ] as const satisfies readonly { provider: string; label: string; enabledKey: keyof EnabledOAuthProviders }[];
 
 export function ConnectedAccounts({ accounts, oauthProviders }: ConnectedAccountsProps) {
@@ -51,7 +53,7 @@ export function ConnectedAccounts({ accounts, oauthProviders }: ConnectedAccount
           </ul>
         ) : (
           <p className="text-sm text-muted-foreground">
-            No connected accounts yet. Connect Google, Microsoft, or GitHub for one-click sign-in.
+            No connected accounts yet. Connect Google, Microsoft, GitHub, or LinkedIn for one-click sign-in.
           </p>
         )}
 

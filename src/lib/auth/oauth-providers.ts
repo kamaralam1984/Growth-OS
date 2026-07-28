@@ -2,6 +2,7 @@ export interface EnabledOAuthProviders {
   google: boolean;
   microsoftEntraId: boolean;
   github: boolean;
+  linkedin: boolean;
 }
 
 /**
@@ -18,5 +19,6 @@ export function getEnabledOAuthProviders(): EnabledOAuthProviders {
       process.env.MICROSOFT_ENTRA_ID_CLIENT_ID && process.env.MICROSOFT_ENTRA_ID_CLIENT_SECRET,
     ),
     github: Boolean(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),
+    linkedin: Boolean(process.env.LINKEDIN_CLIENT_ID && process.env.LINKEDIN_CLIENT_SECRET),
   };
 }
