@@ -10,7 +10,11 @@ import { createOpenAICompatibleProvider } from "./openai-compatible";
  */
 export const openrouterProvider = createOpenAICompatibleProvider({
   id: "OPENROUTER",
-  model: process.env.OPENROUTER_MODEL ?? "openai/gpt-oss-20b:free",
+  // Not a reasoning model on purpose: this app's structured-output path
+  // (json-mode.ts) is prompt-only JSON with no reasoning-token budget
+  // control, so a CoT/reasoning model burns the fixed max_tokens on hidden
+  // thinking before it can emit the JSON, truncating it mid-object.
+  model: process.env.OPENROUTER_MODEL ?? "google/gemma-4-31b-it:free",
   baseUrl: "https://openrouter.ai/api/v1",
   apiKeyEnvVar: "OPENROUTER_API_KEY",
   extraHeaders: {
