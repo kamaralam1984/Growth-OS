@@ -4,7 +4,10 @@ import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { signIn } from "next-auth/react";
+import { motion } from "framer-motion";
+import { Mail, Lock, KeyRound, ArrowRight } from "lucide-react";
 
+import { fadeInUp } from "@/animations";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -86,76 +89,91 @@ export function LoginForm({
   const productName = branding.isWhiteLabeled ? branding.brandName : "GrowthOS";
 
   return (
-    <Card glass className="w-full max-w-sm">
-      <CardHeader>
-        <CardTitle className="text-2xl">Sign in to {productName}</CardTitle>
-        <CardDescription>
-          {branding.isWhiteLabeled && branding.customLoginHeadline
-            ? branding.customLoginHeadline
-            : "Welcome back — enter your details to continue."}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <Input
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-          <Input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-          {needsCode && (
-            <Input
-              type="text"
-              inputMode="numeric"
-              placeholder="6-digit authenticator code"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              maxLength={6}
-              // eslint-disable-next-line jsx-a11y/no-autofocus -- this field only appears after a prior submit revealed it's now required; focusing it isn't page-load focus-theft.
-              autoFocus
-              required
-            />
-          )}
-          <div className="flex items-center justify-between text-sm">
-            <label className="flex items-center gap-2 text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={remember}
-                onChange={(e) => setRemember(e.target.checked)}
-                className="size-4 rounded border-border"
+    <motion.div initial="hidden" animate="visible" variants={fadeInUp} className="w-full max-w-sm">
+      <Card glass className="w-full p-2">
+        <CardHeader className="gap-2 pb-2">
+          <CardTitle className="text-2xl">Sign in to {productName}</CardTitle>
+          <CardDescription>
+            {branding.isWhiteLabeled && branding.customLoginHeadline
+              ? branding.customLoginHeadline
+              : "Welcome back — enter your details to continue."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <div className="relative">
+              <Mail className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="email"
+                placeholder="Email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="pl-10"
+                required
               />
-              Remember me
-            </label>
-            <Link href="/forgot-password" className="text-foreground underline underline-offset-4">
-              Forgot password?
-            </Link>
+            </div>
+            <div className="relative">
+              <Lock className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="password"
+                placeholder="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="pl-10"
+                required
+              />
+            </div>
+            {needsCode && (
+              <div className="relative">
+                <KeyRound className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="6-digit authenticator code"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  maxLength={6}
+                  className="pl-10"
+                  // eslint-disable-next-line jsx-a11y/no-autofocus -- this field only appears after a prior submit revealed it's now required; focusing it isn't page-load focus-theft.
+                  autoFocus
+                  required
+                />
+              </div>
+            )}
+            <div className="flex items-center justify-between text-sm">
+              <label className="flex items-center gap-2 text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={remember}
+                  onChange={(e) => setRemember(e.target.checked)}
+                  className="size-4 rounded border-border"
+                />
+                Remember me
+              </label>
+              <Link href="/forgot-password" className="text-foreground underline underline-offset-4">
+                Forgot password?
+              </Link>
+            </div>
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <Button type="submit" disabled={loading} className="mt-2">
+              {loading ? "Signing in..." : "Sign in"}
+              {!loading && <ArrowRight className="size-4" />}
+            </Button>
+          </form>
+          <div className="mt-6">
+            <OAuthButtons providers={oauthProviders} callbackUrl={callbackUrl} />
           </div>
-          {error && <p className="text-sm text-destructive">{error}</p>}
-          <Button type="submit" disabled={loading} className="mt-2">
-            {loading ? "Signing in..." : "Sign in"}
-          </Button>
-        </form>
-        <div className="mt-6">
-          <OAuthButtons providers={oauthProviders} callbackUrl={callbackUrl} />
-        </div>
-        <p className="mt-6 text-center text-sm text-muted-foreground">
-          Don&apos;t have an account?{" "}
-          <Link
-            href={callbackUrl ? `/register?callbackUrl=${encodeURIComponent(callbackUrl)}` : "/register"}
-            className="text-foreground underline underline-offset-4"
-          >
-            Create one
-          </Link>
-        </p>
-      </CardContent>
-    </Card>
+          <p className="mt-6 text-center text-sm text-muted-foreground">
+            Don&apos;t have an account?{" "}
+            <Link
+              href={callbackUrl ? `/register?callbackUrl=${encodeURIComponent(callbackUrl)}` : "/register"}
+              className="text-foreground underline underline-offset-4"
+            >
+              Create one
+            </Link>
+          </p>
+        </CardContent>
+      </Card>
+    </motion.div>
   );
 }
