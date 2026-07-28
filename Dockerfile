@@ -42,6 +42,14 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ARG DATABASE_URL="postgresql://user:password@localhost:5432/kvl_growthos?schema=public"
 ENV DATABASE_URL=${DATABASE_URL}
 
+# `next build`'s own "Running TypeScript..." step type-checks the whole
+# project in a single worker process — this codebase has grown large enough
+# that Node's default ~2GB heap is no longer enough for that step alone
+# (verified: OOM-kills mid-build otherwise), independent of how much memory
+# the running app itself needs at runtime. Build-time only — never applied
+# to the runner stage below.
+ENV NODE_OPTIONS="--max-old-space-size=4096"
+
 RUN npx prisma generate
 RUN npm run build
 
