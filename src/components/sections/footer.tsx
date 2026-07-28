@@ -1,8 +1,15 @@
-import { Globe, Mail, MessageCircle } from "lucide-react";
+import { Globe } from "lucide-react";
 
 import { Container } from "@/components/ui/container";
 import { Logo } from "@/components/brand/logo";
+import { getSiteUrl } from "@/lib/site-config";
 
+// "Integrations" (public page doesn't exist yet — only the authenticated
+// /dashboard/settings/integrations does) and the "Company" group's
+// About/Careers/Blog (no real company history/bios/job listings exist to
+// source from) are deliberately omitted rather than linked to "#" or a fake
+// "coming soon" page — a shorter, fully-working footer is more honest than
+// one with dead ends.
 const LINK_GROUPS = [
   {
     heading: "Product",
@@ -10,16 +17,12 @@ const LINK_GROUPS = [
       { label: "Features", href: "/product" },
       { label: "How it works", href: "/#how-it-works" },
       { label: "Pricing", href: "/product#pricing" },
-      { label: "Integrations", href: "#" },
     ],
   },
   {
     heading: "Company",
     links: [
-      { label: "About", href: "#" },
-      { label: "Careers", href: "#" },
-      { label: "Blog", href: "#" },
-      { label: "Contact", href: "#" },
+      { label: "Contact", href: "/contact" },
       // Real, public, unauthenticated status page — see src/app/status/page.tsx.
       { label: "System Status", href: "/status" },
     ],
@@ -27,18 +30,17 @@ const LINK_GROUPS = [
   {
     heading: "Legal",
     links: [
-      { label: "Privacy Policy", href: "#" },
-      { label: "Terms of Service", href: "#" },
-      { label: "Security", href: "#" },
+      { label: "Privacy Policy", href: "/privacy" },
+      { label: "Terms of Service", href: "/terms" },
+      { label: "Cookie Policy", href: "/cookies" },
     ],
   },
 ] as const;
 
-const SOCIAL_LINKS = [
-  { label: "Website", icon: Globe, href: "#" },
-  { label: "Email", icon: Mail, href: "#" },
-  { label: "Chat with us", icon: MessageCircle, href: "#" },
-] as const;
+// Email/chat social icons are omitted rather than linked to "#" — no real
+// support email or live-chat tool exists yet; an absent icon reads as
+// honest, a dead-linked one doesn't.
+const SOCIAL_LINKS = [{ label: "Website", icon: Globe, href: getSiteUrl() }] as const;
 
 function Footer() {
   return (

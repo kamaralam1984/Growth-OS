@@ -16,6 +16,8 @@ import {
   Gauge,
   Rocket,
   FileText,
+  Inbox,
+  LineChart,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -70,6 +72,13 @@ const GROUPS: AdminLinkGroup[] = [
     links: [
       { href: "/admin/billing", label: "Billing", icon: CreditCard, exact: true },
       { href: "/admin/payouts", label: "Payouts", icon: Landmark, exact: true },
+    ],
+  },
+  {
+    label: "Marketing",
+    links: [
+      { href: "/admin/sales-inquiries", label: "Sales Inquiries", icon: Inbox, exact: true },
+      { href: "/admin/marketing", label: "Marketing Analytics", icon: LineChart, exact: true },
     ],
   },
   {

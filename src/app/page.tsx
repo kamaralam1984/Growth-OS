@@ -1,3 +1,5 @@
+import type { Metadata } from "next";
+
 import { Navbar } from "@/components/sections/navbar";
 import { Hero } from "@/components/sections/hero";
 import { AIAgents } from "@/components/sections/ai-agents";
@@ -5,6 +7,13 @@ import { Workflow } from "@/components/sections/workflow";
 import { RoiCalculator } from "@/components/sections/roi-calculator";
 import { CTA } from "@/components/sections/cta";
 import { Footer } from "@/components/sections/footer";
+
+export const metadata: Metadata = {
+  title: "KVL GrowthOS — The AI Workforce That Grows Your Business 24/7",
+  description:
+    "A team of AI agents that qualifies leads, runs outreach, drafts proposals, and prioritizes your pipeline around the clock — so deals move forward whether or not anyone's logged in.",
+  alternates: { canonical: "/" },
+};
 
 /**
  * Testimonials, pricing, security, and FAQ moved to /product to keep this

@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { MotionConfig } from "framer-motion";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/toast";
 import { CookieConsentBanner } from "@/components/cookie-consent-banner";
 import { SkipToContent } from "@/components/skip-to-content";
+import { getSiteUrl } from "@/lib/site-config";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -16,8 +18,7 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-// TODO: replace with the real production domain before launch (keep in sync with sitemap.ts / robots.ts).
-const BASE_URL = "https://kvlgrowthos.com";
+const BASE_URL = getSiteUrl();
 
 const title = "KVL GrowthOS — The AI Workforce That Grows Your Business 24/7";
 const description =
@@ -87,9 +88,16 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          {children}
-          <Toaster />
-          <CookieConsentBanner />
+          {/* Makes every framer-motion animation in the app respect the OS
+              "reduce motion" setting automatically — the CSS reduced-motion
+              rule in globals.css only covers plain CSS transitions, not
+              framer-motion's JS-driven `variants` (used throughout the
+              marketing site's sections). */}
+          <MotionConfig reducedMotion="user">
+            {children}
+            <Toaster />
+            <CookieConsentBanner />
+          </MotionConfig>
         </ThemeProvider>
       </body>
     </html>

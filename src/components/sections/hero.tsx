@@ -13,6 +13,9 @@ import { Button } from "@/components/ui/button";
 import { Container } from "@/components/ui/container";
 import { MagneticButton } from "@/components/ui/magnetic-button";
 import { Spotlight } from "@/components/ui/spotlight";
+import { VideoModal } from "@/components/ui/video-modal";
+import { trackMarketingEvent } from "@/lib/client/track-marketing-event";
+import { useScrollDepthTracking } from "@/lib/client/use-scroll-depth-tracking";
 
 const HEADLINE_LINE_ONE = ["The", "AI", "Workforce", "That"] as const;
 const HEADLINE_LINE_TWO = ["Grows", "Your", "Business", "24/7"] as const;
@@ -69,6 +72,14 @@ function RevealLine({
 }
 
 function Hero() {
+  const [demoOpen, setDemoOpen] = React.useState(false);
+  useScrollDepthTracking("/");
+
+  function openDemo() {
+    setDemoOpen(true);
+    trackMarketingEvent("VIDEO_MODAL_OPEN", "/", "hero_watch_demo");
+  }
+
   return (
     <section
       id="top"
@@ -130,7 +141,7 @@ function Hero() {
                 </Button>
               </MagneticButton>
               <MagneticButton>
-                <Button size="lg" variant="outline">
+                <Button size="lg" variant="outline" onClick={openDemo}>
                   <Play />
                   Watch demo
                 </Button>
@@ -163,6 +174,7 @@ function Hero() {
           </motion.div>
         </Container>
       </Spotlight>
+      <VideoModal open={demoOpen} onOpenChange={setDemoOpen} />
     </section>
   );
 }

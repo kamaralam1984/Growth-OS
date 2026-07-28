@@ -8,6 +8,7 @@ try {
   // production image (see docker-compose.yml's note on why `prisma migrate
   // deploy` runs from the host, not inside that container), where real env
   // vars are already set by the process environment.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- must be synchronous so DATABASE_URL below is populated before defineConfig runs; a dynamic import() would resolve too late.
   require("dotenv/config");
 } catch {}
 

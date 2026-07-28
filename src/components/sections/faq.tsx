@@ -6,6 +6,7 @@ import {
 } from "@/components/ui/accordion";
 import { Container } from "@/components/ui/container";
 import { SectionHeading } from "@/components/ui/section-heading";
+import { buildFaqPageJsonLd } from "@/lib/seo/json-ld";
 
 interface FAQItem {
   question: string;
@@ -56,8 +57,11 @@ const FAQS: FAQItem[] = [
 ];
 
 function FAQ() {
+  const jsonLd = buildFaqPageJsonLd(FAQS);
+
   return (
     <section className="relative py-24 sm:py-32">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <Container className="flex flex-col items-center gap-14">
         <SectionHeading
           eyebrow="FAQ"

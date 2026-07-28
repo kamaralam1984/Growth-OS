@@ -13,6 +13,7 @@ import { Container } from "@/components/ui/container";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { trackMarketingEvent } from "@/lib/client/track-marketing-event";
 
 type BillingPeriod = "monthly" | "yearly";
 
@@ -21,7 +22,7 @@ interface Tier {
   description: string;
   monthlyPrice: number | null;
   cta: string;
-  /** Omitted for tiers with no defined destination yet (e.g. Enterprise's "Talk to sales" — no contact route/email exists in this codebase yet); the button renders unwired rather than linking somewhere guessed. */
+  /** Omitted only for a tier with no defined destination yet — the button renders unwired rather than linking somewhere guessed. */
   ctaHref?: string;
   ctaVariant: "default" | "outline" | "glass";
   featured?: boolean;
@@ -67,6 +68,7 @@ const TIERS: Tier[] = [
     description: "Custom workflows for complex sales motions.",
     monthlyPrice: null,
     cta: "Talk to sales",
+    ctaHref: "/contact?department=ENTERPRISE",
     ctaVariant: "outline",
     features: [
       "Custom agent workflows built for your sales motion",
@@ -185,7 +187,12 @@ function Pricing() {
 
                 {tier.ctaHref ? (
                   <Button variant={tier.ctaVariant} size="lg" className="w-full" asChild>
-                    <Link href={tier.ctaHref}>{tier.cta}</Link>
+                    <Link
+                      href={tier.ctaHref}
+                      onClick={() => trackMarketingEvent("CTA_CLICK", "/product", `pricing_${tier.name.toLowerCase()}`)}
+                    >
+                      {tier.cta}
+                    </Link>
                   </Button>
                 ) : (
                   <Button variant={tier.ctaVariant} size="lg" className="w-full">

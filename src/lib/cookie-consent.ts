@@ -14,16 +14,15 @@
  * whether to render), Secure when served over HTTPS, and holds only the
  * consent decision itself — no PII.
  *
- * HONEST SCOPE NOTE: as of this writing this codebase loads ZERO
- * non-essential cookies/trackers of its own (no analytics/ads pixel, no
- * client-side Sentry — see sentry.server.config.ts / sentry.edge.config.ts,
- * there is no sentry.client.config.ts). This banner and its
- * analytics/marketing toggles are real, working consent infrastructure
- * ready for the day a non-essential cookie is actually added — they are not
- * currently gating any script, because there is currently nothing
- * non-essential to gate. Only the strictly-necessary session/auth cookies
- * NextAuth itself sets (and this consent cookie) are set today, regardless
- * of the choice made here.
+ * HONEST SCOPE NOTE: the "analytics" preference here is real and load-bearing
+ * — src/lib/client/track-marketing-event.ts (first-party marketing-site
+ * telemetry, no third-party vendor) checks this exact cookie before ever
+ * sending an event, and stays silent until a visitor actively opts in
+ * (consent defaults to false). No third-party analytics/ads pixel exists,
+ * and there is still no client-side Sentry (see sentry.server.config.ts /
+ * sentry.edge.config.ts — there is no sentry.client.config.ts). The
+ * "marketing" preference remains unused for now — ready for the day a
+ * non-essential marketing cookie is actually added.
  */
 
 export const COOKIE_CONSENT_COOKIE_NAME = "growthos_cookie_consent";

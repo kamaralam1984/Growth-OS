@@ -7,6 +7,7 @@ import { ArrowRight, PhoneCall } from "lucide-react";
 import { Container } from "@/components/ui/container";
 import { Button } from "@/components/ui/button";
 import { fadeInUp, staggerContainer } from "@/animations";
+import { trackMarketingEvent } from "@/lib/client/track-marketing-event";
 
 function CTA() {
   return (
@@ -55,9 +56,14 @@ function CTA() {
                 <ArrowRight />
               </Link>
             </Button>
-            <Button size="lg" variant="outline">
-              <PhoneCall />
-              Talk to sales
+            <Button size="lg" variant="outline" asChild>
+              <Link
+                href="/contact?department=SALES"
+                onClick={() => trackMarketingEvent("CTA_CLICK", "/", "cta_talk_to_sales")}
+              >
+                <PhoneCall />
+                Talk to sales
+              </Link>
             </Button>
           </motion.div>
         </motion.div>
