@@ -19,7 +19,7 @@ import { ALL_COUNTRIES, TIMEZONE_GROUPS } from "@/lib/constants/timezones";
 import type { EffectiveBranding } from "@/lib/white-label/resolve-brand";
 import type { EnabledOAuthProviders } from "@/lib/auth/oauth-providers";
 import { PasswordStrengthMeter } from "./password-strength-meter";
-import { compressImageIfNeeded, MAX_PHOTO_BYTES, ALLOWED_PHOTO_TYPES } from "./compress-image";
+import { compressImageIfNeeded, MAX_IMAGE_UPLOAD_BYTES as MAX_PHOTO_BYTES, ALLOWED_IMAGE_UPLOAD_TYPES as ALLOWED_PHOTO_TYPES } from "@/lib/client/compress-image";
 
 interface FormState {
   firstName: string;

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FormField } from "@/components/ui/form-field";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ImageUploadField } from "@/components/upload/image-upload-field";
 import type { CaseStudyInput } from "@/lib/validations/company";
 import { updateCaseStudies } from "../actions";
 
@@ -142,13 +143,13 @@ export function CaseStudiesSection({ orgId, canEdit, initial }: CaseStudiesSecti
                     onChange={(e) => update(cs.id, { industry: e.target.value })}
                   />
                 </FormField>
-                <FormField label="Image URL" htmlFor={`cs-image-${cs.id}`}>
-                  <Input
+                <FormField label="Image" htmlFor={`cs-image-${cs.id}`}>
+                  <ImageUploadField
                     id={`cs-image-${cs.id}`}
-                    type="url"
-                    placeholder="https://..."
+                    uploadUrl={`/api/organizations/${orgId}/assets`}
+                    extraFields={{ kind: "image", previousUrl: cs.imageUrl ?? "" }}
                     value={cs.imageUrl ?? ""}
-                    onChange={(e) => update(cs.id, { imageUrl: e.target.value })}
+                    onChange={(url) => update(cs.id, { imageUrl: url })}
                   />
                 </FormField>
               </div>

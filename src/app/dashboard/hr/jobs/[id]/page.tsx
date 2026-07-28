@@ -58,11 +58,13 @@ export default async function JobOpeningDetailPage({ params }: { params: Promise
               <CandidateCard
                 key={candidate.id}
                 candidateId={candidate.id}
+                organizationId={job.organizationId}
                 name={candidate.name}
                 email={candidate.email}
                 stage={candidate.stage}
                 matchScore={candidate.matchScore}
                 skillsExtracted={candidate.skillsExtracted as unknown as SkillsExtracted | null}
+                hasResume={Boolean(candidate.resumeStorageKey)}
               />
             ))}
           </div>

@@ -1,11 +1,13 @@
 import { z } from "zod";
 
+import { optionalUrlOrInternalPath } from "./shared";
+
 const optionalUrl = z.string().trim().url("Enter a valid URL.").optional().or(z.literal(""));
 
 // Logo/banner + About/Mission/Vision/Values + social links.
 export const companyAboutSchema = z.object({
-  logo: optionalUrl,
-  banner: optionalUrl,
+  logo: optionalUrlOrInternalPath,
+  banner: optionalUrlOrInternalPath,
   description: z.string().trim().optional(),
   mission: z.string().trim().optional(),
   vision: z.string().trim().optional(),
@@ -58,7 +60,7 @@ export const certificateSchema = z.object({
   issuer: z.string().trim().optional(),
   issuedAt: z.string().trim().optional(),
   expiresAt: z.string().trim().optional(),
-  fileUrl: optionalUrl,
+  fileUrl: optionalUrlOrInternalPath,
 });
 
 export const certificatesSchema = z.array(certificateSchema).max(50);
@@ -86,7 +88,7 @@ export const caseStudySchema = z.object({
   industry: z.string().trim().optional(),
   summary: z.string().trim().min(1, "Summary is required."),
   outcome: z.string().trim().optional(),
-  imageUrl: optionalUrl,
+  imageUrl: optionalUrlOrInternalPath,
 });
 
 export const caseStudiesSchema = z.array(caseStudySchema).max(50);
@@ -99,7 +101,7 @@ export const portfolioItemSchema = z.object({
   title: z.string().trim().min(1, "Title is required."),
   category: z.string().trim().optional(),
   description: z.string().trim().optional(),
-  imageUrl: optionalUrl,
+  imageUrl: optionalUrlOrInternalPath,
   projectUrl: optionalUrl,
 });
 

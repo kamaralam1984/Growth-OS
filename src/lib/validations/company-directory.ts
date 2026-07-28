@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { optionalUrlOrInternalPath } from "./shared";
+
 const optionalUrl = z.string().trim().url("Enter a valid URL.").optional().or(z.literal(""));
 const optionalEmail = z.string().trim().toLowerCase().email("Enter a valid email address.").optional().or(z.literal(""));
 
@@ -18,7 +20,7 @@ export const companySchema = z.object({
   status: companyStatusSchema.default("PROSPECT"),
 
   // ===== Company Intelligence profile fields =====
-  logo: optionalUrl,
+  logo: optionalUrlOrInternalPath,
   description: z.string().trim().max(4000).optional().or(z.literal("")),
   headquartersCountry: z.string().trim().max(100).optional().or(z.literal("")),
   headquartersState: z.string().trim().max(100).optional().or(z.literal("")),

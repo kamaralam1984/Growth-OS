@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { optionalUrlOrInternalPath } from "./shared";
+
 // Mirrors prisma.CompanySize exactly — keep in sync with prisma/schema.prisma.
 export const companySizeSchema = z.enum([
   "SIZE_1_10",
@@ -11,7 +13,7 @@ export const companySizeSchema = z.enum([
 
 export const companyProfileSchema = z.object({
   name: z.string().trim().min(1, "Company name is required."),
-  logo: z.string().trim().url("Enter a valid URL.").optional().or(z.literal("")),
+  logo: optionalUrlOrInternalPath,
   industry: z.string().trim().optional(),
   website: z.string().trim().url("Enter a valid URL.").optional().or(z.literal("")),
   email: z.string().trim().toLowerCase().email("Enter a valid email address.").optional().or(z.literal("")),

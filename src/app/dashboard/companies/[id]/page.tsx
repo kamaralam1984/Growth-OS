@@ -253,6 +253,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
 
                 <CompanyEditForm
                   companyId={company.id}
+                  organizationId={company.organizationId}
                   canDelete={canDelete}
                   initial={{
                     name: company.name,

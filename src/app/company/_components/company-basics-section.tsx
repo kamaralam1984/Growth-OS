@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { FormField } from "@/components/ui/form-field";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { ImageUploadField } from "@/components/upload/image-upload-field";
 import { TagInput } from "@/app/onboarding/_components/tag-input";
 import type { CompanyAboutInput } from "@/lib/validations/company";
 import { updateCompanyAbout } from "../actions";
@@ -86,11 +87,24 @@ export function CompanyBasicsSection({ orgId, canEdit, initial }: CompanyBasicsS
       <CardContent>
         <form onSubmit={handleSubmit} className="flex flex-col gap-5">
           <div className="grid gap-4 sm:grid-cols-2">
-            <FormField label="Logo URL" htmlFor="logo">
-              <Input id="logo" type="url" value={form.logo ?? ""} onChange={(e) => set("logo", e.target.value)} />
+            <FormField label="Logo" htmlFor="logo">
+              <ImageUploadField
+                id="logo"
+                uploadUrl={`/api/organizations/${orgId}/assets`}
+                extraFields={{ kind: "image", previousUrl: form.logo ?? "" }}
+                value={form.logo ?? ""}
+                onChange={(url) => set("logo", url)}
+              />
             </FormField>
-            <FormField label="Banner URL" htmlFor="banner">
-              <Input id="banner" type="url" value={form.banner ?? ""} onChange={(e) => set("banner", e.target.value)} />
+            <FormField label="Banner" htmlFor="banner">
+              <ImageUploadField
+                id="banner"
+                uploadUrl={`/api/organizations/${orgId}/assets`}
+                extraFields={{ kind: "image", previousUrl: form.banner ?? "" }}
+                value={form.banner ?? ""}
+                onChange={(url) => set("banner", url)}
+                previewClassName="h-11 w-24"
+              />
             </FormField>
           </div>
 

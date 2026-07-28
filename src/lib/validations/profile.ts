@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { passwordSchema } from "@/lib/validations/auth";
+import { optionalUrlOrInternalPath } from "@/lib/validations/shared";
 
 // Mirrors the editable subset of User — email is intentionally excluded,
 // changing email is out of scope for this phase (shown read-only in the UI).
@@ -12,7 +13,7 @@ export const personalInfoSchema = z.object({
   language: z.string().trim().optional(),
   timezone: z.string().trim().optional(),
   jobTitle: z.string().trim().optional(),
-  image: z.string().trim().url("Enter a valid photo URL.").optional().or(z.literal("")),
+  image: optionalUrlOrInternalPath,
 });
 
 export type PersonalInfoInput = z.infer<typeof personalInfoSchema>;

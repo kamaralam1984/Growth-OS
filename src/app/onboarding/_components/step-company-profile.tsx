@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { FormField } from "@/components/ui/form-field";
+import { ImageUploadField } from "@/components/upload/image-upload-field";
 import { fadeInUp, staggerContainer } from "@/animations";
 import type { CompanyProfileInput } from "@/lib/validations/onboarding";
 
@@ -26,11 +27,12 @@ const INDUSTRIES = [
 ];
 
 export interface StepCompanyProfileProps {
+  organizationId: string;
   initial: CompanyProfileInput;
   onSave: (data: CompanyProfileInput) => Promise<{ ok: boolean; error?: string }>;
 }
 
-export function StepCompanyProfile({ initial, onSave }: StepCompanyProfileProps) {
+export function StepCompanyProfile({ organizationId, initial, onSave }: StepCompanyProfileProps) {
   const [form, setForm] = useState<CompanyProfileInput>(initial);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -80,13 +82,13 @@ export function StepCompanyProfile({ initial, onSave }: StepCompanyProfileProps)
             ))}
           </Select>
         </FormField>
-        <FormField label="Logo URL" htmlFor="logo">
-          <Input
+        <FormField label="Logo" htmlFor="logo">
+          <ImageUploadField
             id="logo"
-            type="url"
-            placeholder="https://..."
+            uploadUrl={`/api/organizations/${organizationId}/assets`}
+            extraFields={{ kind: "image", previousUrl: form.logo ?? "" }}
             value={form.logo ?? ""}
-            onChange={(e) => set("logo", e.target.value)}
+            onChange={(url) => set("logo", url)}
           />
         </FormField>
       </motion.div>

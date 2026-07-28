@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FormField } from "@/components/ui/form-field";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ImageUploadField } from "@/components/upload/image-upload-field";
 import type { PortfolioItemInput } from "@/lib/validations/company";
 import { updatePortfolio } from "../actions";
 
@@ -124,13 +125,13 @@ export function PortfolioSection({ orgId, canEdit, initial }: PortfolioSectionPr
                 </FormField>
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
-                <FormField label="Image URL" htmlFor={`portfolio-image-${item.id}`}>
-                  <Input
+                <FormField label="Image" htmlFor={`portfolio-image-${item.id}`}>
+                  <ImageUploadField
                     id={`portfolio-image-${item.id}`}
-                    type="url"
-                    placeholder="https://..."
+                    uploadUrl={`/api/organizations/${orgId}/assets`}
+                    extraFields={{ kind: "image", previousUrl: item.imageUrl ?? "" }}
                     value={item.imageUrl ?? ""}
-                    onChange={(e) => update(item.id, { imageUrl: e.target.value })}
+                    onChange={(url) => update(item.id, { imageUrl: url })}
                   />
                 </FormField>
                 <FormField label="Project URL" htmlFor={`portfolio-project-${item.id}`}>

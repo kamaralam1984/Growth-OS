@@ -103,6 +103,7 @@ export default async function ProfilePage() {
                 image: user.image ?? "",
               }}
               email={user.email ?? ""}
+              userId={user.id}
             />
           </TabsContent>
 

@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { FormField } from "@/components/ui/form-field";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ImageUploadField } from "@/components/upload/image-upload-field";
 import { updateCompany, deleteCompany } from "../actions";
 import { INDUSTRIES } from "@/lib/industries";
 import type { CompanyStatusInput } from "@/lib/validations/company-directory";
@@ -58,6 +59,7 @@ export interface CompanyEditFormFields {
 
 export interface CompanyEditFormProps {
   companyId: string;
+  organizationId: string;
   canDelete: boolean;
   initial: CompanyEditFormFields;
 }
@@ -69,7 +71,7 @@ function splitTags(value: string): string[] {
     .filter(Boolean);
 }
 
-export function CompanyEditForm({ companyId, canDelete, initial }: CompanyEditFormProps) {
+export function CompanyEditForm({ companyId, organizationId, canDelete, initial }: CompanyEditFormProps) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [deleting, startDeleteTransition] = useTransition();
@@ -146,8 +148,14 @@ export function CompanyEditForm({ companyId, canDelete, initial }: CompanyEditFo
                 ))}
               </Select>
             </FormField>
-            <FormField label="Logo URL" htmlFor="edit-logo">
-              <Input id="edit-logo" value={fields.logo} onChange={(e) => set("logo", e.target.value)} />
+            <FormField label="Logo" htmlFor="edit-logo">
+              <ImageUploadField
+                id="edit-logo"
+                uploadUrl={`/api/organizations/${organizationId}/assets`}
+                extraFields={{ kind: "image", previousUrl: fields.logo }}
+                value={fields.logo}
+                onChange={(url) => set("logo", url)}
+              />
             </FormField>
             <FormField label="Founded year" htmlFor="edit-founded">
               <Input

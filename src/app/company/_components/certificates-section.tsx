@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FormField } from "@/components/ui/form-field";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { DocumentUploadField } from "@/components/upload/document-upload-field";
 import type { CertificateInput } from "@/lib/validations/company";
 import { updateCertificates } from "../actions";
 
@@ -146,12 +147,12 @@ export function CertificatesSection({ orgId, canEdit, initial }: CertificatesSec
                   />
                 </FormField>
                 <FormField label="Certificate file" htmlFor={`cert-file-${cert.id}`}>
-                  <Input
+                  <DocumentUploadField
                     id={`cert-file-${cert.id}`}
-                    type="url"
-                    placeholder="https://..."
+                    uploadUrl={`/api/organizations/${orgId}/assets`}
+                    extraFields={{ kind: "document", previousUrl: cert.fileUrl ?? "" }}
                     value={cert.fileUrl ?? ""}
-                    onChange={(e) => update(cert.id, { fileUrl: e.target.value })}
+                    onChange={(url) => update(cert.id, { fileUrl: url })}
                   />
                 </FormField>
               </div>

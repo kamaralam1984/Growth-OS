@@ -7,16 +7,19 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { FormField } from "@/components/ui/form-field";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { COMMON_COUNTRIES, COMMON_LANGUAGES } from "@/lib/constants/onboarding";
+import { ImageUploadField } from "@/components/upload/image-upload-field";
+import { COMMON_LANGUAGES } from "@/lib/constants/onboarding";
+import { ALL_COUNTRIES, TIMEZONE_GROUPS } from "@/lib/constants/timezones";
 import type { PersonalInfoInput } from "@/lib/validations/profile";
 import { updatePersonalInfo } from "../actions";
 
 export interface PersonalInfoFormProps {
   initial: PersonalInfoInput;
   email: string;
+  userId: string;
 }
 
-export function PersonalInfoForm({ initial, email }: PersonalInfoFormProps) {
+export function PersonalInfoForm({ initial, email, userId }: PersonalInfoFormProps) {
   const [form, setForm] = useState<PersonalInfoInput>(initial);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -94,9 +97,9 @@ export function PersonalInfoForm({ initial, email }: PersonalInfoFormProps) {
             <FormField label="Country" htmlFor="country">
               <Select id="country" value={form.country ?? ""} onChange={(e) => set("country", e.target.value)}>
                 <option value="">Select a country</option>
-                {COMMON_COUNTRIES.map((country) => (
-                  <option key={country} value={country}>
-                    {country}
+                {ALL_COUNTRIES.map((country) => (
+                  <option key={country.code} value={country.name}>
+                    {country.name}
                   </option>
                 ))}
               </Select>
@@ -114,15 +117,27 @@ export function PersonalInfoForm({ initial, email }: PersonalInfoFormProps) {
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <FormField label="Timezone" htmlFor="timezone" hint="IANA name, e.g. America/New_York.">
-              <Input
-                id="timezone"
-                value={form.timezone ?? ""}
-                onChange={(e) => set("timezone", e.target.value)}
-              />
+            <FormField label="Timezone" htmlFor="timezone">
+              <Select id="timezone" value={form.timezone ?? ""} onChange={(e) => set("timezone", e.target.value)}>
+                <option value="">Select a timezone</option>
+                {TIMEZONE_GROUPS.map((group) => (
+                  <optgroup key={group.countryName} label={group.countryName}>
+                    {group.timezones.map((tz) => (
+                      <option key={tz.name} value={tz.name}>
+                        {tz.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </Select>
             </FormField>
-            <FormField label="Profile photo URL" htmlFor="image">
-              <Input id="image" type="url" value={form.image ?? ""} onChange={(e) => set("image", e.target.value)} />
+            <FormField label="Profile photo" htmlFor="image">
+              <ImageUploadField
+                id="image"
+                uploadUrl={`/api/users/${userId}/avatar`}
+                value={form.image ?? ""}
+                onChange={(url) => set("image", url)}
+              />
             </FormField>
           </div>
 

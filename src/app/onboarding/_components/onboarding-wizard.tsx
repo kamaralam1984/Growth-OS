@@ -142,6 +142,7 @@ export function OnboardingWizard({ organization: initialOrganization }: { organi
                 >
                   {currentStep === 1 && (
                     <StepCompanyProfile
+                      organizationId={organization.id}
                       initial={toCompanyProfileForm(organization)}
                       onSave={handleSaveCompanyProfile}
                     />

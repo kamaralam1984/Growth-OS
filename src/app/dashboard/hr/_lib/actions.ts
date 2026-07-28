@@ -10,6 +10,8 @@ import { createJobOpening, generateJobDescription, moveCandidateStage, scheduleI
 import { requestLeave, decideLeaveRequest } from "@/lib/hr/leave";
 import { provisionOnboardingTasks } from "@/lib/hr/onboarding";
 import { analyzeCandidateResume } from "@/lib/recruitment/resume-analysis";
+import { extractResumeText } from "@/lib/recruitment/resume-text-extraction";
+import { saveCandidateResume, removeCandidateResume } from "@/lib/storage/resumes";
 import type { CandidateStage, InterviewStatus, LeaveType, LeaveRequestStatus } from "@/generated/prisma/client";
 
 export interface ActionResult {
@@ -115,6 +117,44 @@ export async function recordInterviewFeedbackAction(interviewId: string, status:
     return { ok: true };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "Could not record feedback." };
+  }
+}
+
+/**
+ * Real resume file upload — replaces the "paste resume text" requirement
+ * with an actual PDF/DOCX upload: saves the file (src/lib/storage/
+ * resumes.ts), extracts its real text (src/lib/recruitment/
+ * resume-text-extraction.ts), and feeds that real text into the exact same
+ * analyzeCandidateResume() the paste-text flow already uses — no separate
+ * "uploaded resume" analysis path to keep in sync.
+ */
+export async function uploadResumeAction(candidateId: string, file: File): Promise<ActionResult> {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) return { ok: false, error: "You must be signed in." };
+  const membership = await resolveActiveMembership(userId);
+  if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
+
+  const candidate = await prisma.candidate.findUnique({ where: { id: candidateId } });
+  if (!candidate || candidate.organizationId !== membership.organizationId) {
+    return { ok: false, error: "Candidate not found." };
+  }
+
+  try {
+    const text = await extractResumeText(Buffer.from(await file.arrayBuffer()), file.type);
+    if (!text.trim()) return { ok: false, error: "Could not extract any text from that file." };
+
+    const { storageKey } = await saveCandidateResume(membership.organizationId, candidateId, file);
+    if (candidate.resumeStorageKey && candidate.resumeStorageKey !== storageKey) {
+      removeCandidateResume(candidate.resumeStorageKey).catch(() => {});
+    }
+    await prisma.candidate.update({ where: { id: candidateId }, data: { resumeStorageKey: storageKey } });
+
+    await analyzeCandidateResume(candidateId, membership.organizationId, text);
+    revalidatePath(`/dashboard/hr/jobs/${candidate.jobOpeningId}`);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Could not process that resume." };
   }
 }
 

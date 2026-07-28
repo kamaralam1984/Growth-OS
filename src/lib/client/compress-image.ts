@@ -3,13 +3,15 @@
  * even sent over the wire, using the browser's own canvas encoder (no
  * external library). Only re-encodes PNG/JPEG/WebP, since canvas.toBlob()
  * can't preserve GIF animation frames or encode AVIF — those pass through
- * untouched and rely on the server-side sharp pass in
- * src/lib/storage/avatars.ts instead. The result is only kept if it's
- * actually smaller than the original; otherwise the original file is used.
+ * untouched and rely on the server-side sharp pass (src/lib/storage/
+ * image-compression.ts) instead. The result is only kept if it's actually
+ * smaller than the original; otherwise the original file is used. Shared by
+ * every real upload surface (register photo, profile photo, organization/
+ * company logo/banner, portfolio/case-study images).
  */
 
-export const MAX_PHOTO_BYTES = 20 * 1024 * 1024;
-export const ALLOWED_PHOTO_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"];
+export const MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024;
+export const ALLOWED_IMAGE_UPLOAD_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"];
 
 const COMPRESS_ABOVE_BYTES = 400 * 1024;
 const MAX_DIMENSION_PX = 1600;

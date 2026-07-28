@@ -1,15 +1,15 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
-import { Sparkles } from "lucide-react";
+import { useRef, useState, useTransition } from "react";
+import { FileText, Sparkles, Upload } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
-import { moveCandidateStageAction, analyzeResumeAction } from "../../../_lib/actions";
+import { moveCandidateStageAction, analyzeResumeAction, uploadResumeAction } from "../../../_lib/actions";
 import type { CandidateStage } from "@/generated/prisma/client";
 
 const STAGES: CandidateStage[] = ["APPLIED", "SCREENING", "INTERVIEW", "OFFER", "HIRED", "REJECTED"];
@@ -21,23 +21,28 @@ interface SkillsExtracted {
 
 export function CandidateCard({
   candidateId,
+  organizationId,
   name,
   email,
   stage,
   matchScore,
   skillsExtracted,
+  hasResume,
 }: {
   candidateId: string;
+  organizationId: string;
   name: string;
   email: string | null;
   stage: CandidateStage;
   matchScore: number | null;
   skillsExtracted: SkillsExtracted | null;
+  hasResume: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [resumeOpen, setResumeOpen] = useState(false);
   const [resumeText, setResumeText] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   function handleStageChange(next: string) {
     startTransition(async () => {
@@ -65,6 +70,22 @@ export function CandidateCard({
     });
   }
 
+  function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    startTransition(async () => {
+      const result = await uploadResumeAction(candidateId, file);
+      if (!result.ok) {
+        toast.error(result.error ?? "Could not process resume.");
+        return;
+      }
+      toast.success("Resume uploaded and analyzed.");
+      setResumeOpen(false);
+      router.refresh();
+    });
+    e.target.value = "";
+  }
+
   return (
     <Card glass>
       <CardContent className="flex flex-col gap-2 p-4">
@@ -86,6 +107,17 @@ export function CandidateCard({
           <p className="text-xs text-muted-foreground">Deterministic keyword match vs. job description: {matchScore}%</p>
         )}
 
+        {hasResume && (
+          <a
+            href={`/api/organizations/${organizationId}/candidates/${candidateId}/resume`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex w-fit items-center gap-1.5 text-xs text-primary hover:underline"
+          >
+            <FileText className="size-3.5" /> View uploaded resume
+          </a>
+        )}
+
         {skillsExtracted ? (
           <div className="flex flex-col gap-1">
             <p className="text-xs text-muted-foreground">{skillsExtracted.summary}</p>
@@ -99,6 +131,19 @@ export function CandidateCard({
           </div>
         ) : resumeOpen ? (
           <div className="flex flex-col gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              onChange={handleFileSelected}
+              className="hidden"
+            />
+            <Button type="button" size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={pending} className="self-start">
+              <Upload className="size-3.5" /> Upload PDF/DOCX
+            </Button>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="h-px flex-1 bg-border" /> or paste text <span className="h-px flex-1 bg-border" />
+            </div>
             <textarea
               placeholder="Paste resume text..."
               value={resumeText}
@@ -106,8 +151,8 @@ export function CandidateCard({
               className="min-h-24 rounded-lg border border-border bg-background px-3 py-2 text-sm"
             />
             <div className="flex gap-2">
-              <Button type="button" size="sm" onClick={handleAnalyze} disabled={pending}>
-                <Sparkles className="size-3.5" /> Analyze
+              <Button type="button" size="sm" onClick={handleAnalyze} disabled={pending || !resumeText.trim()}>
+                <Sparkles className="size-3.5" /> Analyze pasted text
               </Button>
               <Button type="button" size="sm" variant="outline" onClick={() => setResumeOpen(false)}>
                 Cancel

@@ -6,13 +6,7 @@ import { Container } from "@/components/ui/container";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ApplyPublisherForm } from "./_components/apply-publisher-form";
-
-const STATUS_VARIANT: Record<string, "default" | "secondary" | "outline" | "accent"> = {
-  PENDING: "secondary",
-  APPROVED: "accent",
-  SUSPENDED: "outline",
-  REJECTED: "outline",
-};
+import { PublisherProfileForm } from "./_components/publisher-profile-form";
 
 export default async function PublisherPortalPage() {
   const session = await auth();
@@ -41,27 +35,19 @@ export default async function PublisherPortalPage() {
           <ApplyPublisherForm />
         ) : (
           <>
-            <Card glass className="max-w-xl">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  {publisher.displayName}
-                  <Badge variant={STATUS_VARIANT[publisher.status]}>{publisher.status}</Badge>
-                </CardTitle>
-                <CardDescription>
-                  {publisher.status === "PENDING"
-                    ? "A platform operator reviews and approves new publisher applications manually — there's no self-service approval."
-                    : publisher.status === "APPROVED"
-                      ? "Approved — your submitted listings can go through review and publish."
-                      : "Your publisher account is not currently active."}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-2 text-sm text-muted-foreground">
-                <p>Contact: {publisher.contactEmail}</p>
-                {publisher.companyName && <p>Company: {publisher.companyName}</p>}
-                {publisher.website && <p>Website: {publisher.website}</p>}
-                {publisher.partner && <p>Referral/payout code: {publisher.partner.referralCode} ({publisher.partner.status})</p>}
-              </CardContent>
-            </Card>
+            <PublisherProfileForm
+              status={publisher.status}
+              initial={{
+                displayName: publisher.displayName,
+                companyName: publisher.companyName ?? "",
+                website: publisher.website ?? "",
+                bio: publisher.bio ?? "",
+                logoUrl: publisher.logoStorageKey ? `/api/marketplace/publisher/${userId}/logo` : "",
+              }}
+              referralInfo={
+                publisher.partner ? `Referral/payout code: ${publisher.partner.referralCode} (${publisher.partner.status})` : null
+              }
+            />
 
             <Card glass>
               <CardHeader>
