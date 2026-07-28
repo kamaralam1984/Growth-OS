@@ -10,6 +10,11 @@ import { Security } from "@/components/sections/security";
 import { FAQ } from "@/components/sections/faq";
 import { CTA } from "@/components/sections/cta";
 import { Footer } from "@/components/sections/footer";
+import { TechnologyPartners } from "@/components/sections/trust/technology-partners";
+import { ClientJourney } from "@/components/sections/trust/client-journey";
+import { EnterpriseTrustBar } from "@/components/sections/trust/enterprise-trust-bar";
+import { WhyChooseKVL } from "@/components/sections/trust/why-choose-kvl";
+import { SecurityBadges } from "@/components/sections/trust/security-badges";
 
 export const metadata: Metadata = {
   title: "KVL GrowthOS Product Tour",
@@ -35,15 +40,20 @@ export default function ProductTourPage() {
         </div>
         <ProblemSolution />
         <Features />
+        <TechnologyPartners />
+        <ClientJourney />
+        <EnterpriseTrustBar />
         <div id="social-proof">
           <SocialProof />
         </div>
         <div id="pricing">
           <Pricing />
         </div>
+        <WhyChooseKVL />
         <div id="security">
           <Security />
         </div>
+        <SecurityBadges />
         <div id="faq">
           <FAQ />
         </div>
