@@ -55,6 +55,15 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Auth emails (verification, sign-in alerts, invites, magic links —
+      # src/lib/email.ts). Without EMAIL_SERVER set, these silently fall back
+      # to a "[DEV] Email to ..." console log instead of a real send.
+      EMAIL_SERVER: ${EMAIL_SERVER:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      # Outreach Assistant's real send path (src/lib/outreach/email-provider.ts)
+      # and its webhook signature verification.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_WEBHOOK_SECRET: ${RESEND_WEBHOOK_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy
