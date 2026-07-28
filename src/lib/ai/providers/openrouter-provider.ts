@@ -10,11 +10,14 @@ import { createOpenAICompatibleProvider } from "./openai-compatible";
  */
 export const openrouterProvider = createOpenAICompatibleProvider({
   id: "OPENROUTER",
-  // Not a reasoning model on purpose: this app's structured-output path
-  // (json-mode.ts) is prompt-only JSON with no reasoning-token budget
-  // control, so a CoT/reasoning model burns the fixed max_tokens on hidden
-  // thinking before it can emit the JSON, truncating it mid-object.
-  model: process.env.OPENROUTER_MODEL ?? "google/gemma-4-31b-it:free",
+  // google/gemma-4-31b-it:free (tried before this) was returning HTTP 429
+  // "temporarily rate-limited upstream" from its backing provider (Google AI
+  // Studio) on every request — a shared free-tier capacity issue, not
+  // something this app can fix. nvidia/nemotron-nano-9b-v2:free was verified
+  // live (direct /chat/completions call against the board's actual JSON
+  // schema) to return finish_reason: "stop" with a complete, valid JSON body
+  // well inside the 2048 max_tokens budget.
+  model: process.env.OPENROUTER_MODEL ?? "nvidia/nemotron-nano-9b-v2:free",
   baseUrl: "https://openrouter.ai/api/v1",
   apiKeyEnvVar: "OPENROUTER_API_KEY",
   extraHeaders: {
