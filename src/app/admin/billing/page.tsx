@@ -168,6 +168,7 @@ export default async function AdminBillingPage() {
     select: { id: true, name: true },
   });
   const orgById = new Map(topCustomerOrgs.map((o) => [o.id, o]));
+  const topCustomerIds = new Set(topCustomers.map((c) => c.organizationId));
 
   const thisMonthRevenue = monthlyRevenue[5]?.value ?? 0;
   const prevMonthRevenue = monthlyRevenue[4]?.value ?? 0;
@@ -335,9 +336,13 @@ export default async function AdminBillingPage() {
                   {failedPayments.map((payment) => (
                     <TableRow key={payment.id}>
                       <TableCell className="font-medium text-foreground">
-                        <Link href={`#org-${payment.organizationId}`} className="hover:text-primary hover:underline">
-                          {payment.organization.name}
-                        </Link>
+                        {topCustomerIds.has(payment.organizationId) ? (
+                          <Link href={`#org-${payment.organizationId}`} className="hover:text-primary hover:underline">
+                            {payment.organization.name}
+                          </Link>
+                        ) : (
+                          payment.organization.name
+                        )}
                       </TableCell>
                       <TableCell className="text-muted-foreground">{payment.provider}</TableCell>
                       <TableCell className="max-w-xs truncate text-red-500">{payment.failureReason ?? "—"}</TableCell>
@@ -373,10 +378,14 @@ export default async function AdminBillingPage() {
                   {outstandingInvoices.map((invoice) => (
                     <TableRow key={invoice.id}>
                       <TableCell className="font-medium text-foreground">{invoice.invoiceNumber}</TableCell>
-                      <TableCell>
-                        <Link href={`#org-${invoice.organizationId}`} className="text-muted-foreground hover:text-primary hover:underline">
-                          {invoice.organization.name}
-                        </Link>
+                      <TableCell className="text-muted-foreground">
+                        {topCustomerIds.has(invoice.organizationId) ? (
+                          <Link href={`#org-${invoice.organizationId}`} className="hover:text-primary hover:underline">
+                            {invoice.organization.name}
+                          </Link>
+                        ) : (
+                          invoice.organization.name
+                        )}
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline" className="border-amber-500/40 text-amber-600">

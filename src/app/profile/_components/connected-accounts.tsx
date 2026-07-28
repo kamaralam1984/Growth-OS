@@ -6,9 +6,11 @@ import { Link2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import type { EnabledOAuthProviders } from "@/lib/auth/oauth-providers";
 
 export interface ConnectedAccountsProps {
   accounts: { id: string; provider: string }[];
+  oauthProviders: EnabledOAuthProviders;
 }
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -18,12 +20,12 @@ const PROVIDER_LABELS: Record<string, string> = {
 };
 
 const CONNECT_OPTIONS = [
-  { provider: "google", label: "Google" },
-  { provider: "microsoft-entra-id", label: "Microsoft" },
-  { provider: "github", label: "GitHub" },
-] as const;
+  { provider: "google", label: "Google", enabledKey: "google" },
+  { provider: "microsoft-entra-id", label: "Microsoft", enabledKey: "microsoftEntraId" },
+  { provider: "github", label: "GitHub", enabledKey: "github" },
+] as const satisfies readonly { provider: string; label: string; enabledKey: keyof EnabledOAuthProviders }[];
 
-export function ConnectedAccounts({ accounts }: ConnectedAccountsProps) {
+export function ConnectedAccounts({ accounts, oauthProviders }: ConnectedAccountsProps) {
   const connectedProviders = new Set(accounts.map((a) => a.provider));
 
   return (
@@ -54,7 +56,9 @@ export function ConnectedAccounts({ accounts }: ConnectedAccountsProps) {
         )}
 
         <div className="flex flex-wrap gap-3">
-          {CONNECT_OPTIONS.filter((option) => !connectedProviders.has(option.provider)).map((option) => (
+          {CONNECT_OPTIONS.filter(
+            (option) => !connectedProviders.has(option.provider) && oauthProviders[option.enabledKey],
+          ).map((option) => (
             <Button
               key={option.provider}
               type="button"

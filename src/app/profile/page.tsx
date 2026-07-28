@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { Container } from "@/components/ui/container";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import { getEnabledOAuthProviders } from "@/lib/auth/oauth-providers";
 
 import { PersonalInfoForm } from "./_components/personal-info-form";
 import { SecuritySection } from "./_components/security-section";
@@ -141,7 +142,7 @@ export default async function ProfilePage() {
           </TabsContent>
 
           <TabsContent value="connected">
-            <ConnectedAccounts accounts={accounts} />
+            <ConnectedAccounts accounts={accounts} oauthProviders={getEnabledOAuthProviders()} />
           </TabsContent>
 
           <TabsContent value="api-keys">

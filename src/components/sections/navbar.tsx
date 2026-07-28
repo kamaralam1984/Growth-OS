@@ -273,8 +273,10 @@ function Navbar() {
                   {link.label}
                 </a>
               ))}
-              <Button size="sm" className="mt-2">
-                Start free trial
+              <Button size="sm" className="mt-2" asChild>
+                <Link href="/register" onClick={() => setMobileOpen(false)}>
+                  Start free trial
+                </Link>
               </Button>
             </div>
           ) : null}

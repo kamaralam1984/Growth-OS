@@ -39,13 +39,17 @@ export async function purchaseListingAction(listingId: string): Promise<Purchase
   if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
   if (membership.role !== "OWNER" && membership.role !== "ADMIN") return { ok: false, error: "Only owners/admins can install marketplace listings." };
 
+  const listing = await prisma.marketplaceListing.findUnique({ where: { id: listingId }, select: { slug: true } });
+  // slug is nullable in the schema; fall back to the marketplace index rather than an unresolvable `/marketplace/` path.
+  const cancelPath = listing?.slug ? `/dashboard/marketplace/${listing.slug}` : "/dashboard/marketplace";
+
   const origin = await originUrl();
   const result = await startMarketplaceCheckout({
     organizationId: membership.organizationId,
     listingId,
     buyerUserId: userId,
     successUrl: `${origin}/dashboard/marketplace/installed?purchased=1`,
-    cancelUrl: `${origin}/dashboard/marketplace/${listingId}`,
+    cancelUrl: `${origin}${cancelPath}`,
   });
 
   return result;
