@@ -10,7 +10,7 @@ import { createOpenAICompatibleProvider } from "./openai-compatible";
  */
 export const openrouterProvider = createOpenAICompatibleProvider({
   id: "OPENROUTER",
-  model: process.env.OPENROUTER_MODEL ?? "meta-llama/llama-3.3-70b-instruct:free",
+  model: process.env.OPENROUTER_MODEL ?? "openai/gpt-oss-20b:free",
   baseUrl: "https://openrouter.ai/api/v1",
   apiKeyEnvVar: "OPENROUTER_API_KEY",
   extraHeaders: {

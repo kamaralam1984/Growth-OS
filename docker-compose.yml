@@ -55,6 +55,10 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # OpenRouter rotates which model backs its free tier — override without
+      # a code change/rebuild if the hardcoded default in
+      # src/lib/ai/providers/openrouter-provider.ts goes stale again.
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
       # Auth emails (verification, sign-in alerts, invites, magic links —
       # src/lib/email.ts). Without EMAIL_SERVER set, these silently fall back
       # to a "[DEV] Email to ..." console log instead of a real send.
