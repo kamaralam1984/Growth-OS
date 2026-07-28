@@ -16,7 +16,6 @@ export const registerSchema = z.object({
   language: z.string().trim().optional(),
   timezone: z.string().trim().optional(),
   jobTitle: z.string().trim().optional(),
-  image: z.string().trim().url("Enter a valid photo URL.").optional().or(z.literal("")),
 });
 
 export type RegisterInput = z.infer<typeof registerSchema>;

@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { signIn } from "next-auth/react";
 import { motion } from "framer-motion";
+import { ImagePlus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,10 +14,12 @@ import { FormField } from "@/components/ui/form-field";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { fadeInUp } from "@/animations";
-import { COMMON_COUNTRIES, COMMON_LANGUAGES } from "@/lib/constants/onboarding";
+import { COMMON_LANGUAGES } from "@/lib/constants/onboarding";
+import { ALL_COUNTRIES, TIMEZONE_GROUPS } from "@/lib/constants/timezones";
 import type { EffectiveBranding } from "@/lib/white-label/resolve-brand";
 import type { EnabledOAuthProviders } from "@/lib/auth/oauth-providers";
 import { PasswordStrengthMeter } from "./password-strength-meter";
+import { compressImageIfNeeded, MAX_PHOTO_BYTES, ALLOWED_PHOTO_TYPES } from "./compress-image";
 
 interface FormState {
   firstName: string;
@@ -28,7 +31,6 @@ interface FormState {
   language: string;
   timezone: string;
   jobTitle: string;
-  image: string;
 }
 
 const INITIAL_STATE: FormState = {
@@ -41,8 +43,13 @@ const INITIAL_STATE: FormState = {
   language: "",
   timezone: "",
   jobTitle: "",
-  image: "",
 };
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 // Only ever redirect to a same-origin relative path (e.g. a preserved
 // "/invite/accept?token=..." destination) — never to an absolute/external
@@ -66,6 +73,11 @@ export function RegisterForm({
   const [form, setForm] = useState<FormState>(INITIAL_STATE);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [photoPreviewUrl, setPhotoPreviewUrl] = useState<string | null>(null);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const [compressing, setCompressing] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Phase 18 reseller referral capture: a visitor arriving via a partner's
   // referral link (e.g. /register?ref=ABC123) gets that code stashed in a
@@ -80,8 +92,53 @@ export function RegisterForm({
     }
   }, [searchParams]);
 
+  // Revoke the blob: preview URL when the component unmounts (or a new one
+  // replaces it) — otherwise it leaks for the tab's lifetime.
+  useEffect(() => {
+    return () => {
+      if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl);
+    };
+  }, [photoPreviewUrl]);
+
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  // Real client-side validation + compression, so a 15MB phone photo isn't
+  // sent over the wire at full size — the actual upload cap (20MB) is
+  // enforced again server-side in saveUserAvatar, never trusted from the
+  // client alone.
+  async function handlePhotoSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPhotoError(null);
+
+    if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+      setPhotoError("Use PNG, JPEG, WebP, GIF, or AVIF.");
+      e.target.value = "";
+      return;
+    }
+    if (file.size > MAX_PHOTO_BYTES) {
+      setPhotoError(`Photo must be ${Math.round(MAX_PHOTO_BYTES / (1024 * 1024))}MB or smaller.`);
+      e.target.value = "";
+      return;
+    }
+
+    setCompressing(true);
+    const finalFile = await compressImageIfNeeded(file).catch(() => file);
+    setCompressing(false);
+
+    if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl);
+    setPhoto(finalFile);
+    setPhotoPreviewUrl(URL.createObjectURL(finalFile));
+  }
+
+  function clearPhoto() {
+    if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl);
+    setPhoto(null);
+    setPhotoPreviewUrl(null);
+    setPhotoError(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -89,11 +146,11 @@ export function RegisterForm({
     setError(null);
     setLoading(true);
 
-    const response = await fetch("/api/register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
-    });
+    const body = new FormData();
+    for (const [key, value] of Object.entries(form)) body.append(key, value);
+    if (photo) body.append("photo", photo);
+
+    const response = await fetch("/api/register", { method: "POST", body });
 
     if (!response.ok) {
       const data = await response.json().catch(() => null);
@@ -206,9 +263,9 @@ export function RegisterForm({
                   onChange={(e) => set("country", e.target.value)}
                 >
                   <option value="">Select a country</option>
-                  {COMMON_COUNTRIES.map((country) => (
-                    <option key={country} value={country}>
-                      {country}
+                  {ALL_COUNTRIES.map((country) => (
+                    <option key={country.code} value={country.name}>
+                      {country.name}
                     </option>
                   ))}
                 </Select>
@@ -230,27 +287,63 @@ export function RegisterForm({
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <FormField
-                label="Timezone"
-                htmlFor="timezone"
-                hint="IANA name, e.g. America/New_York or Asia/Karachi."
-              >
-                <Input
+              <FormField label="Timezone" htmlFor="timezone">
+                <Select
                   id="timezone"
-                  type="text"
-                  placeholder="e.g. America/New_York"
                   value={form.timezone}
                   onChange={(e) => set("timezone", e.target.value)}
-                />
+                >
+                  <option value="">Select a timezone</option>
+                  {TIMEZONE_GROUPS.map((group) => (
+                    <optgroup key={group.countryName} label={group.countryName}>
+                      {group.timezones.map((tz) => (
+                        <option key={tz.name} value={tz.name}>
+                          {tz.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </Select>
               </FormField>
-              <FormField label="Photo URL" htmlFor="image">
-                <Input
-                  id="image"
-                  type="url"
-                  placeholder="https://..."
-                  value={form.image}
-                  onChange={(e) => set("image", e.target.value)}
-                />
+
+              <FormField label="Photo" htmlFor="photo" hint="PNG, JPEG, WebP, GIF, or AVIF — up to 20MB, compressed automatically.">
+                <div className="flex items-center gap-3">
+                  <input
+                    ref={fileInputRef}
+                    id="photo"
+                    type="file"
+                    accept={ALLOWED_PHOTO_TYPES.join(",")}
+                    onChange={handlePhotoSelect}
+                    className="hidden"
+                  />
+                  {photoPreviewUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- local blob: preview URL, not an optimizable static asset
+                    <img src={photoPreviewUrl} alt="Selected profile" className="size-11 shrink-0 rounded-full object-cover" />
+                  ) : (
+                    <span className="flex size-11 shrink-0 items-center justify-center rounded-full border border-dashed border-input text-muted-foreground">
+                      <ImagePlus className="size-4" />
+                    </span>
+                  )}
+                  <Button type="button" variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} disabled={compressing}>
+                    {compressing ? "Compressing..." : photo ? "Change" : "Upload photo"}
+                  </Button>
+                  {photo && (
+                    <button
+                      type="button"
+                      onClick={clearPhoto}
+                      className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      aria-label="Remove selected photo"
+                    >
+                      <X className="size-4" />
+                    </button>
+                  )}
+                </div>
+                {photo && !photoError && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {photo.name} — {formatBytes(photo.size)}
+                  </p>
+                )}
+                {photoError && <p className="mt-1 text-xs text-destructive">{photoError}</p>}
               </FormField>
             </div>
 

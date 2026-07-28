@@ -6,6 +6,7 @@ import { checkRateLimitDegradable } from "@/lib/security/rate-limit-distributed"
 import { sendVerificationEmail } from "@/lib/auth/verification-actions";
 import { hashPassword } from "@/lib/auth/password";
 import { clientIpFromHeaders } from "@/lib/security/client-ip";
+import { saveUserAvatar } from "@/lib/storage/avatars";
 
 function clientIp(request: Request): string {
   return clientIpFromHeaders(request.headers);
@@ -23,8 +24,22 @@ export async function POST(request: Request) {
     );
   }
 
-  const body = await request.json().catch(() => null);
-  const parsed = registerSchema.safeParse(body);
+  // Multipart form (not JSON) so a real photo File can ride along with the
+  // text fields — see register-form.tsx's handleSubmit.
+  const formData = await request.formData().catch(() => null);
+  if (!formData) {
+    return NextResponse.json({ error: "Please check your details and try again." }, { status: 400 });
+  }
+
+  const textFields = Object.fromEntries(
+    ["email", "password", "firstName", "lastName", "phone", "country", "language", "timezone", "jobTitle"].map(
+      (key) => {
+        const value = formData.get(key);
+        return [key, typeof value === "string" ? value : undefined];
+      },
+    ),
+  );
+  const parsed = registerSchema.safeParse(textFields);
 
   if (!parsed.success) {
     return NextResponse.json(
@@ -33,8 +48,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const { email, password, firstName, lastName, phone, country, language, timezone, jobTitle, image } =
-    parsed.data;
+  const { email, password, firstName, lastName, phone, country, language, timezone, jobTitle } = parsed.data;
 
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) {
@@ -56,9 +70,23 @@ export async function POST(request: Request) {
       language: language || undefined,
       timezone: timezone || undefined,
       jobTitle: jobTitle || undefined,
-      image: image || undefined,
     },
   });
+
+  // Best-effort — a failed photo upload must never block account creation;
+  // the user can always add/change a photo later from profile settings.
+  const photo = formData.get("photo");
+  if (photo instanceof File && photo.size > 0) {
+    try {
+      const { storageKey } = await saveUserAvatar(user.id, photo);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { avatarStorageKey: storageKey, image: `/api/users/${user.id}/avatar` },
+      });
+    } catch (error) {
+      console.error("[register] failed to save profile photo:", error);
+    }
+  }
 
   // Best-effort — a failed verification email must never block registration.
   try {

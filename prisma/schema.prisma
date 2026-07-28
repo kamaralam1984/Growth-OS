@@ -16,7 +16,15 @@ model User {
   lastName      String?
   email         String?   @unique
   emailVerified DateTime?
+  // Public-facing value — either an external URL (legacy: pasted directly,
+  // or an OAuth provider's own avatar URL) or our own serving route
+  // (/api/users/{id}/avatar) once avatarStorageKey is set below.
   image         String?
+  // Real on-disk storage key for a self-hosted avatar upload (src/lib/
+  // storage/avatars.ts) — null when the user has no uploaded photo (still
+  // using an external `image` URL, or no photo at all). Mirrors
+  // WhiteLabelSettings.logoStorageKey's exact pattern.
+  avatarStorageKey String?
   password      String?
 
   phone    String?
