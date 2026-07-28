@@ -16,6 +16,7 @@ import { RadarChart } from "../_components/radar-chart";
 import { OpportunityMatrix } from "../_components/opportunity-matrix";
 import { FindingsChecklist, type Finding } from "../_components/findings-checklist";
 import { TechnologyChipGrid } from "../_components/technology-chip-grid";
+import { DomainInfoCard } from "../_components/domain-info-card";
 import { ScanCrmActions } from "../_components/scan-crm-actions";
 
 export default async function ScanReportPage({ params }: { params: Promise<{ id: string }> }) {
@@ -26,6 +27,7 @@ export default async function ScanReportPage({ params }: { params: Promise<{ id:
     where: { id },
     include: {
       technologies: true,
+      domainInfo: true,
       seoAudit: true,
       performanceAudit: true,
       securityAudit: true,
@@ -147,22 +149,35 @@ export default async function ScanReportPage({ params }: { params: Promise<{ id:
                 </TabsList>
 
                 <TabsContent value="overview">
-                  <Card glass>
-                    <CardHeader>
-                      <CardTitle className="text-base">Opportunity dimensions</CardTitle>
-                    </CardHeader>
-                    <CardContent className="flex justify-center pt-0">
-                      <RadarChart
-                        axes={[
-                          { label: "SEO", value: scan.seoAudit?.seoScore ?? 0 },
-                          { label: "Performance", value: scan.performanceAudit?.performanceScore ?? 0 },
-                          { label: "Security", value: scan.securityAudit?.securityScore ?? 0 },
-                          { label: "UX", value: scan.uxAudit?.uxScore ?? 0 },
-                          { label: "AI Readiness", value: scan.opportunity.aiReadinessScore },
-                        ]}
-                      />
-                    </CardContent>
-                  </Card>
+                  <div className="flex flex-col gap-4">
+                    <Card glass>
+                      <CardHeader>
+                        <CardTitle className="text-base">Opportunity dimensions</CardTitle>
+                      </CardHeader>
+                      <CardContent className="flex justify-center pt-0">
+                        <RadarChart
+                          axes={[
+                            { label: "SEO", value: scan.seoAudit?.seoScore ?? 0 },
+                            { label: "Performance", value: scan.performanceAudit?.performanceScore ?? 0 },
+                            { label: "Security", value: scan.securityAudit?.securityScore ?? 0 },
+                            { label: "UX", value: scan.uxAudit?.uxScore ?? 0 },
+                            { label: "AI Readiness", value: scan.opportunity.aiReadinessScore },
+                          ]}
+                        />
+                      </CardContent>
+                    </Card>
+
+                    <Card glass>
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2 text-base">
+                          Domain Registration <Badge variant="outline">Real RDAP lookup</Badge>
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="pt-0">
+                        <DomainInfoCard domainInfo={scan.domainInfo} />
+                      </CardContent>
+                    </Card>
+                  </div>
                 </TabsContent>
 
                 <TabsContent value="technology">
@@ -199,7 +214,11 @@ export default async function ScanReportPage({ params }: { params: Promise<{ id:
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="flex flex-col gap-3 pt-0">
-                      <p className="text-xs text-muted-foreground">Estimated from static response analysis — not a Lighthouse/Core Web Vitals measurement.</p>
+                      <p className="text-xs text-muted-foreground">
+                        {scan.performanceAudit?.measuredByRealBrowser
+                          ? "Includes real Core Web Vitals (LCP/CLS/a long-task-based TBT proxy) measured by an actual headless-Chromium render, blended with static response analysis — not a full Lighthouse report."
+                          : "Estimated from static response analysis — not a Lighthouse/Core Web Vitals measurement."}
+                      </p>
                       <FindingsChecklist findings={(scan.performanceAudit?.findings as Finding[] | undefined) ?? []} />
                     </CardContent>
                   </Card>
@@ -283,6 +302,12 @@ export default async function ScanReportPage({ params }: { params: Promise<{ id:
                           <p className="text-xs font-semibold text-foreground">Executive summary</p>
                           <p className="mt-1 text-sm text-muted-foreground">{scan.executiveReport.executiveSummary}</p>
                         </div>
+                        {scan.executiveReport.businessPurposeSummary && (
+                          <div>
+                            <p className="text-xs font-semibold text-foreground">What this business does</p>
+                            <p className="mt-1 text-sm text-muted-foreground">{scan.executiveReport.businessPurposeSummary}</p>
+                          </div>
+                        )}
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                           <div>
                             <p className="text-xs font-semibold text-foreground">Strengths</p>

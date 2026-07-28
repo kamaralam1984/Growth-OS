@@ -4009,6 +4009,7 @@ model WebsiteScan {
   createdByUser User         @relation(fields: [createdByUserId], references: [id], onDelete: Cascade)
 
   technologies     Technology[]
+  domainInfo       DomainInfo?
   seoAudit         SEOAudit?
   performanceAudit PerformanceAudit?
   securityAudit    SecurityAudit?
@@ -4040,6 +4041,27 @@ model Technology {
   @@index([scanId])
 }
 
+// Real RDAP (the modern, HTTP/JSON successor to WHOIS — no API key needed,
+// no rate-limit-gated third-party service) lookup against the registry the
+// domain's TLD actually delegates to (via the IANA RDAP bootstrap registry).
+// lookupSucceeded=false + lookupError set is a normal, honest outcome (many
+// registries rate-limit or don't run RDAP yet) — never backfilled with a
+// guessed date.
+model DomainInfo {
+  id              String    @id @default(cuid())
+  scanId          String    @unique
+  domain          String
+  registrar       String?
+  registeredAt    DateTime?
+  domainAgeDays   Int?
+  expiresAt       DateTime?
+  rdapSource      String?
+  lookupSucceeded Boolean   @default(false)
+  lookupError     String?
+
+  scan WebsiteScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+}
+
 model SEOAudit {
   id                     String  @id @default(cuid())
   scanId                 String  @unique
@@ -4064,6 +4086,14 @@ model SEOAudit {
   hasSitemap             Boolean
   hasRobotsTxt           Boolean
   isIndexable            Boolean
+  // Real SERP ranking lookup — genuinely pluggable, never simulated. Null
+  // fields mean "no rank-check provider is configured" (see
+  // src/lib/scanner/seo-rank.ts), not "ranked outside the results". Populated
+  // only when a real provider key (e.g. SERPAPI_KEY) is set.
+  rankCheckKeyword       String?
+  rankCheckPosition      Int?
+  rankCheckProvider      String?
+  rankCheckedAt          DateTime?
   seoScore               Int
   findings               Json
 
@@ -4084,6 +4114,22 @@ model PerformanceAudit {
   imageTagCount    Int
   hasCaching       Boolean
   hasCompression   Boolean
+  // Real DOM fact: <script> tags in <head> without async/defer, which block
+  // initial render.
+  renderBlockingScriptCount Int @default(0)
+  // Real inspection of <img> src extensions (webp/avif vs legacy formats).
+  modernImageFormatPct      Int @default(100)
+  // Real inspection of <img loading="lazy"> attribute usage.
+  lazyLoadedImagePct        Int @default(100)
+  // Real Core Web Vitals from an actual headless-Chromium render (Playwright,
+  // src/lib/scanner/browser-metrics.ts) — only populated when
+  // ENABLE_BROWSER_SCAN=true AND the render genuinely succeeded. Null means
+  // "not measured this way", never a guessed/interpolated value; the
+  // static-signal fields above remain the fallback the score is based on.
+  largestContentfulPaintMs Int?
+  cumulativeLayoutShift    Float?
+  totalBlockingTimeMs      Int?
+  measuredByRealBrowser    Boolean @default(false)
   performanceScore Int
   findings         Json
 
@@ -4100,17 +4146,30 @@ model UXAudit {
   // Real Flesch-Kincaid readability score computed on extracted visible text.
   readabilityScore    Float
   viewportMetaPresent Boolean
-  // Always the honest "not measured" string — real contrast checking needs
-  // rendered CSS, out of scope for a static HTML scan.
+  // Human-readable summary of the contrast check outcome — either the real
+  // declared color/background pair found in the site's own CSS, or an
+  // honest "no usable pair found" note.
   colorContrastNote   String
+  // Real WCAG relative-luminance contrast ratio computed from a
+  // color/background pair actually declared in inline <style> or the first
+  // same-origin external stylesheet. Null when no usable pair was found —
+  // heuristic on real declared CSS, not a rendered/computed-style check.
+  contrastRatio       Float?
+  // True when contrastRatio/colorContrastNote came from a real rendered
+  // computed-style check (Playwright, src/lib/scanner/browser-metrics.ts)
+  // instead of the declared-CSS heuristic in contrast.ts — a genuinely
+  // stronger check (resolves cascade/specificity/CSS variables), only
+  // available when ENABLE_BROWSER_SCAN=true and the render succeeded.
+  contrastMeasuredByRealBrowser Boolean @default(false)
   uxScore             Int
   findings            Json
 
   scan WebsiteScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
 }
 
-// A high-level, non-invasive assessment (public HTTP headers/cookies/HTTPS
-// only) — never a penetration test. Always disclaimed as such in the UI.
+// A high-level, non-invasive assessment (public HTTP headers/cookies/HTTPS/
+// TLS-handshake/known-sensitive-paths only) — never a penetration test.
+// Always disclaimed as such in the UI.
 model SecurityAudit {
   id                     String   @id @default(cuid())
   scanId                 String   @unique
@@ -4119,9 +4178,33 @@ model SecurityAudit {
   hasCsp                 Boolean
   hasXFrameOptions       Boolean
   hasXContentTypeOptions Boolean
+  hasReferrerPolicy      Boolean  @default(false)
+  hasPermissionsPolicy   Boolean  @default(false)
   cookiesSecureFlag      Boolean?
   cookiesHttpOnlyFlag    Boolean?
   mixedContentCount      Int
+  // Real check: Access-Control-Allow-Origin: * combined with
+  // Access-Control-Allow-Credentials: true on the main response.
+  corsMisconfigured         Boolean @default(false)
+  // Real bounded fetch of a handful of well-known sensitive paths
+  // (/.env, /.git/config) — genuine misconfiguration detection.
+  exposedSensitiveFileCount Int     @default(0)
+  // Real TLS handshake (node:tls) against the live host — Node's own
+  // certificate-chain/hostname validation, not a third-party API.
+  tlsAuthorized          Boolean?
+  tlsProtocol            String?
+  tlsDaysUntilExpiry     Int?
+  // Real parse of the Strict-Transport-Security header's max-age directive —
+  // null when HSTS isn't set at all (distinct from hasHsts=true, weak).
+  hstsMaxAgeSeconds      Int?
+  // Real substring check on the Content-Security-Policy header value itself.
+  cspHasUnsafeDirectives Boolean?
+  // Real Set-Cookie attribute parse — null when no cookies were observed
+  // (same "no data" semantics as cookiesSecureFlag/cookiesHttpOnlyFlag).
+  cookiesSameSiteFlag    Boolean?
+  // Real count of <script src> tags pointing cross-origin without an
+  // integrity="..." attribute — a genuine supply-chain risk signal.
+  missingSriScriptCount  Int      @default(0)
   securityScore          Int
   findings               Json
 
@@ -4182,6 +4265,11 @@ model ExecutiveReport {
   strengths                  String[]
   weaknesses                 String[]
   businessOpportunities      String[]
+  // What this business does and who it appears to serve — inferred by the
+  // model strictly from real scraped page text/metadata, never a template
+  // guess. Distinct from technologyOverview, which is about the stack, not
+  // the business itself.
+  businessPurposeSummary     String   @db.Text @default("")
   technologyOverview         String   @db.Text
   seoFindingsSummary         String   @db.Text
   performanceFindingsSummary String   @db.Text

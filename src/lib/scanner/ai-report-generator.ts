@@ -41,6 +41,7 @@ const ExecutiveReportResponseSchema = z.object({
   strengths: z.array(z.string().trim().min(1)).max(8),
   weaknesses: z.array(z.string().trim().min(1)).max(8),
   businessOpportunities: z.array(z.string().trim().min(1)).max(8),
+  businessPurposeSummary: z.string().trim().min(1),
   technologyOverview: z.string().trim().min(1),
   seoFindingsSummary: z.string().trim().min(1),
   performanceFindingsSummary: z.string().trim().min(1),
@@ -68,6 +69,7 @@ async function buildScanSummary(scanId: string) {
     where: { id: scanId },
     include: {
       technologies: true,
+      domainInfo: true,
       seoAudit: true,
       performanceAudit: true,
       securityAudit: true,
@@ -81,6 +83,12 @@ async function buildScanSummary(scanId: string) {
     [scan.websiteName, scan.companyNameInput, scan.industryInput, scan.websiteType].some(Boolean)
       ? `User-provided context: ${[scan.websiteName && `name "${scan.websiteName}"`, scan.companyNameInput && `company "${scan.companyNameInput}"`, scan.industryInput && `industry "${scan.industryInput}"`, scan.websiteType && `type "${scan.websiteType}"`].filter(Boolean).join(", ")}`
       : "No user-provided company context.",
+    scan.seoAudit?.metaTitle || scan.seoAudit?.metaDescription
+      ? `Page title/description (real, from the site's own <title>/<meta description>): ${scan.seoAudit.metaTitle ? `Title: "${scan.seoAudit.metaTitle}". ` : ""}${scan.seoAudit.metaDescription ? `Description: "${scan.seoAudit.metaDescription}".` : ""}`
+      : "Page title/description: not found.",
+    scan.domainInfo?.lookupSucceeded
+      ? `Domain registration (real RDAP lookup): registered ${scan.domainInfo.registeredAt?.toISOString().slice(0, 10)} (~${scan.domainInfo.domainAgeDays} days old)${scan.domainInfo.registrar ? `, registrar ${scan.domainInfo.registrar}` : ""}.`
+      : "Domain registration: RDAP lookup unavailable for this domain.",
     scan.technologies.length > 0
       ? `Detected technologies (real, evidence-based):\n${scan.technologies.map((t) => `  - ${t.name} (${t.category}) — evidence: ${t.evidence}`).join("\n")}`
       : "Detected technologies: none identified by the signature scan.",
@@ -132,7 +140,7 @@ export async function generateExecutiveReport(scanId: string): Promise<Executive
 
   try {
     const result = await generateStructured({
-      system: `${persona.systemPrompt}\n\nYou are writing a premium Executive Opportunity Report for a website audit. Ground every sentence strictly in the real findings given to you below — never invent a fact, a technology, a score, or a business detail not present in that data. Where you infer something about the business (industry, business model, target customers) from the real signals, phrase it as an inference, not a certainty. Recommend 3 to 6 software solutions ONLY from the fixed category list you're given (never invent a new category), and only recommend something the real findings actually support — if the data doesn't support a strong recommendation, say so honestly rather than padding the list. All monetary figures elsewhere in this report are handled separately as indicative estimates, not quotations — do not state exact prices yourself.`,
+      system: `${persona.systemPrompt}\n\nYou are writing a premium Executive Opportunity Report for a website audit. Ground every sentence strictly in the real findings given to you below — never invent a fact, a technology, a score, or a business detail not present in that data. Where you infer something about the business (industry, business model, target customers) from the real signals, phrase it as an inference, not a certainty. For businessPurposeSummary specifically: describe, in plain language, what this business appears to do and who it appears to serve, based only on the page title/description/user-provided context given below — if that data is too thin to say anything specific, say so honestly rather than inventing a plausible-sounding business. Recommend 3 to 6 software solutions ONLY from the fixed category list you're given (never invent a new category), and only recommend something the real findings actually support — if the data doesn't support a strong recommendation, say so honestly rather than padding the list. All monetary figures elsewhere in this report are handled separately as indicative estimates, not quotations — do not state exact prices yourself.`,
       userContent: `Here is the real, verified scan data for this website:\n\n${summary}\n\nWrite the Executive Report now, plus 3-6 grounded software recommendations from this exact category list: ${RECOMMENDATION_CATEGORIES.join(", ")}.`,
       maxTokens: 4096,
       effort: "medium",
@@ -153,6 +161,7 @@ export async function generateExecutiveReport(scanId: string): Promise<Executive
           strengths: parsed.strengths,
           weaknesses: parsed.weaknesses,
           businessOpportunities: parsed.businessOpportunities,
+          businessPurposeSummary: parsed.businessPurposeSummary,
           technologyOverview: parsed.technologyOverview,
           seoFindingsSummary: parsed.seoFindingsSummary,
           performanceFindingsSummary: parsed.performanceFindingsSummary,

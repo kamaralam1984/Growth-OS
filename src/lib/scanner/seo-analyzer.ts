@@ -1,5 +1,6 @@
 import { safeFetchWebsite } from "./safe-fetch";
 import type { ParsedHtml } from "./html-parser";
+import { checkSeoRank, isSeoRankCheckConfigured, SEO_RANK_RESULTS_CHECKED } from "./seo-rank";
 
 /**
  * Real, deterministic SEO analysis — every field traces to a real HTML fact
@@ -32,11 +33,22 @@ export interface SEOAuditResult {
   hasSitemap: boolean;
   hasRobotsTxt: boolean;
   isIndexable: boolean;
+  rankCheckKeyword: string | null;
+  rankCheckPosition: number | null;
+  rankCheckProvider: string | null;
+  rankCheckedAt: Date | null;
   seoScore: number;
   findings: SEOFinding[];
 }
 
 const BROKEN_LINK_SAMPLE_SIZE = 10;
+
+/** Best-effort brand-keyword guess for the rank check — the part of the <title> before the first separator, or the domain name itself. Disclosed as a guess in the finding text, never presented as a chosen target keyword. */
+function guessBrandKeyword(title: string | null, hostname: string): string {
+  const titlePart = title?.split(/[|\-–—:]/)[0]?.trim();
+  if (titlePart && titlePart.length >= 2) return titlePart;
+  return hostname.replace(/^www\./, "").split(".")[0];
+}
 
 function headingStructureIsValid(headings: Array<{ level: number }>): boolean {
   let prevLevel = 0;
@@ -129,6 +141,25 @@ export async function analyzeSEO(parsed: ParsedHtml, baseUrl: string): Promise<S
     detail: `${brokenCount} broken out of ${sample.length} sampled internal links.`,
   });
 
+  // Real Google SERP position — only when SERPAPI_KEY is configured (see
+  // seo-rank.ts). Deliberately NOT folded into seoScore below: this is an
+  // optional, paid, provider-dependent signal, and mixing it into the score
+  // would make scores incomparable between scans run with vs. without a key.
+  const rankCheckConfigured = isSeoRankCheckConfigured();
+  const rankCheckKeyword = guessBrandKeyword(parsed.title, base.hostname);
+  const rankCheck = rankCheckConfigured ? await checkSeoRank({ keyword: rankCheckKeyword, targetHostname: base.hostname }) : null;
+  findings.push({
+    label: "Search ranking (brand keyword)",
+    status: !rankCheckConfigured ? "warn" : rankCheck?.error ? "warn" : rankCheck?.found && rankCheck.position! <= 3 ? "pass" : "warn",
+    detail: !rankCheckConfigured
+      ? `Rank tracking not configured — set SERPAPI_KEY to enable a real Google search-position check.`
+      : rankCheck?.error
+        ? `Rank check failed: ${rankCheck.error}`
+        : rankCheck?.found
+          ? `Ranks #${rankCheck.position} on Google for its own guessed brand keyword "${rankCheck.keyword}".`
+          : `Did not appear in the top ${SEO_RANK_RESULTS_CHECKED} Google results for its own guessed brand keyword "${rankCheck?.keyword}".`,
+  });
+
   let score = 0;
   score += parsed.title ? (titleLen >= 10 && titleLen <= 60 ? 15 : 8) : 0;
   score += parsed.metaDescription ? (descLen >= 50 && descLen <= 160 ? 15 : 8) : 0;
@@ -163,6 +194,10 @@ export async function analyzeSEO(parsed: ParsedHtml, baseUrl: string): Promise<S
     hasSitemap,
     hasRobotsTxt,
     isIndexable,
+    rankCheckKeyword: rankCheck ? rankCheck.keyword : null,
+    rankCheckPosition: rankCheck?.position ?? null,
+    rankCheckProvider: rankCheck ? rankCheck.provider : null,
+    rankCheckedAt: rankCheck ? rankCheck.checkedAt : null,
     seoScore,
     findings,
   };

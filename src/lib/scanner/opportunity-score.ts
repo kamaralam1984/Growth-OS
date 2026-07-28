@@ -16,6 +16,9 @@ export interface OpportunityInput {
   uxScore: number;
   technologiesCount: number;
   employeeCountHint?: number | null;
+  // Real RDAP-derived domain age (src/lib/scanner/domain-info.ts) — null when
+  // the lookup failed/wasn't available, never guessed.
+  domainAgeDays?: number | null;
 }
 
 export interface OpportunityComputation {
@@ -32,7 +35,7 @@ export interface OpportunityComputation {
 }
 
 export function computeOpportunity(input: OpportunityInput): OpportunityComputation {
-  const { seoScore, performanceScore, securityScore, uxScore, technologiesCount, employeeCountHint } = input;
+  const { seoScore, performanceScore, securityScore, uxScore, technologiesCount, employeeCountHint, domainAgeDays } = input;
 
   // Digital maturity — how well the current site is built, averaged across the 3 UX-facing dimensions.
   const digitalScore = Math.round((seoScore + performanceScore + uxScore) / 3);
@@ -79,8 +82,12 @@ export function computeOpportunity(input: OpportunityInput): OpportunityComputat
 
   // Confidence is never HIGH from static analysis alone — reserved for when
   // real business-size data is on file. Documented honest-neutral judgment
-  // call, same spirit as lead-scoring.ts's NEUTRAL fallback.
-  const confidenceLevel: ConfidenceLevel = employeeCountHint ? "MEDIUM" : "LOW";
+  // call, same spirit as lead-scoring.ts's NEUTRAL fallback. A domain
+  // registered under 30 days ago (real RDAP fact, not a guess) overrides any
+  // employee-count hint back down to LOW — too little real history exists
+  // yet for even a MEDIUM-confidence estimate to be honest.
+  const isFreshDomain = typeof domainAgeDays === "number" && domainAgeDays < 30;
+  const confidenceLevel: ConfidenceLevel = isFreshDomain ? "LOW" : employeeCountHint ? "MEDIUM" : "LOW";
 
   return {
     digitalScore,

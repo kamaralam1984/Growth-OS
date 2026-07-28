@@ -9,6 +9,8 @@ import { analyzeSecurity } from "./security-analyzer";
 import { analyzeUX } from "./ux-analyzer";
 import { computeOpportunity } from "./opportunity-score";
 import { generateExecutiveReport } from "./ai-report-generator";
+import { lookupDomainInfo } from "./domain-info";
+import { captureBrowserMetrics } from "./browser-metrics";
 import { AINotConnectedError, AIBillingError, isAIBillingError } from "@/lib/ai/client";
 
 export interface RunScanResult {
@@ -30,11 +32,13 @@ function describeAiReportError(error: unknown): { kind: "not_connected" | "billi
 
 /**
  * Orchestrates one full website scan: real fetch → real parse → real
- * detector/analyzers → deterministic Opportunity score → one real AI
- * reasoning pass. Every verified section (Technology/SEO/Performance/
- * Security/UX/Opportunity) persists regardless of AI availability — the
- * Executive Report is the only part gated on a working Claude connection,
- * and its failure is surfaced honestly rather than blocking the whole scan.
+ * detector/analyzers (+ an optional real headless-Chromium render when
+ * ENABLE_BROWSER_SCAN=true, see browser-metrics.ts) → real RDAP domain-age
+ * lookup → deterministic Opportunity score → one real AI reasoning pass.
+ * Every verified section (Technology/DomainInfo/SEO/Performance/Security/
+ * UX/Opportunity) persists regardless of AI availability — the Executive
+ * Report is the only part gated on a working Claude connection, and its
+ * failure is surfaced honestly rather than blocking the whole scan.
  * Synchronous, awaited end-to-end — same "no background jobs" convention as
  * every other AI action in this app.
  */
@@ -56,16 +60,24 @@ export async function runWebsiteScan(scanId: string): Promise<RunScanResult> {
   const parsed = parseHtml(fetchResult.html, fetchResult.finalUrl);
   const technologies = detectTechnologies(fetchResult.headers, parsed);
 
-  const [seo, performance, security, ux] = await Promise.all([
+  // Real headless-Chromium render (Playwright), captured once and shared by
+  // both the performance and UX analyzers — a single browser launch, not
+  // two. Returns null (honest no-op, static heuristics remain the answer)
+  // unless ENABLE_BROWSER_SCAN=true AND the render genuinely succeeds.
+  const browserMetrics = await captureBrowserMetrics(fetchResult.finalUrl);
+
+  const [seo, performance, security, ux, domainInfo] = await Promise.all([
     analyzeSEO(parsed, fetchResult.finalUrl),
-    Promise.resolve(analyzePerformance({ responseTimeMs: fetchResult.responseTimeMs, html: fetchResult.html, headers: fetchResult.headers, parsed })),
-    Promise.resolve(analyzeSecurity({ finalUrl: fetchResult.finalUrl, headers: fetchResult.headers, parsed })),
-    Promise.resolve(analyzeUX(parsed)),
+    Promise.resolve(analyzePerformance({ responseTimeMs: fetchResult.responseTimeMs, html: fetchResult.html, headers: fetchResult.headers, parsed, browserMetrics })),
+    analyzeSecurity({ finalUrl: fetchResult.finalUrl, headers: fetchResult.headers, parsed }),
+    analyzeUX(parsed, fetchResult.finalUrl, browserMetrics),
+    lookupDomainInfo(new URL(fetchResult.finalUrl).hostname),
   ]);
 
   if (technologies.length > 0) {
     await prisma.technology.createMany({ data: technologies.map((t) => ({ scanId, name: t.name, category: t.category, evidence: t.evidence })) });
   }
+  await prisma.domainInfo.create({ data: { scanId, ...domainInfo } });
   await prisma.sEOAudit.create({ data: { scanId, ...seo, findings: seo.findings as unknown as Prisma.InputJsonValue } });
   await prisma.performanceAudit.create({ data: { scanId, ...performance, findings: performance.findings as unknown as Prisma.InputJsonValue } });
   await prisma.securityAudit.create({ data: { scanId, ...security, findings: security.findings as unknown as Prisma.InputJsonValue } });
@@ -77,6 +89,7 @@ export async function runWebsiteScan(scanId: string): Promise<RunScanResult> {
     securityScore: security.securityScore,
     uxScore: ux.uxScore,
     technologiesCount: technologies.length,
+    domainAgeDays: domainInfo.domainAgeDays,
   });
   await prisma.opportunity.create({
     data: {

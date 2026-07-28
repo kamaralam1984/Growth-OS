@@ -30,7 +30,9 @@ export interface ParsedHtml {
   images: ParsedImage[];
   links: ParsedLink[];
   scriptSrcs: string[];
+  scriptsWithoutAsyncOrDefer: number;
   stylesheetHrefs: string[];
+  inlineStyleCss: string;
   formCount: number;
   navPresent: boolean;
   visibleText: string;
@@ -70,9 +72,14 @@ export function parseHtml(html: string, baseUrl: string): ParsedHtml {
   });
 
   const scriptSrcs: string[] = [];
+  let scriptsWithoutAsyncOrDefer = 0;
   $("script[src]").each((_, el) => {
     const src = $(el).attr("src");
-    if (src) scriptSrcs.push(src);
+    if (!src) return;
+    scriptSrcs.push(src);
+    const inHead = $(el).parents("head").length > 0;
+    const hasAsyncOrDefer = $(el).attr("async") !== undefined || $(el).attr("defer") !== undefined;
+    if (inHead && !hasAsyncOrDefer) scriptsWithoutAsyncOrDefer++;
   });
 
   const stylesheetHrefs: string[] = [];
@@ -80,6 +87,12 @@ export function parseHtml(html: string, baseUrl: string): ParsedHtml {
     const href = $(el).attr("href");
     if (href) stylesheetHrefs.push(href);
   });
+
+  const inlineStyleCss = $("style")
+    .map((_, el) => $(el).text())
+    .get()
+    .join("\n")
+    .slice(0, 50_000);
 
   $("script, style, noscript").remove();
   const visibleText = $("body").text().replace(/\s+/g, " ").trim();
@@ -97,7 +110,9 @@ export function parseHtml(html: string, baseUrl: string): ParsedHtml {
     images,
     links,
     scriptSrcs,
+    scriptsWithoutAsyncOrDefer,
     stylesheetHrefs,
+    inlineStyleCss,
     formCount: $("form").length,
     navPresent: $("nav").length > 0 || $('[role="navigation"]').length > 0,
     visibleText,

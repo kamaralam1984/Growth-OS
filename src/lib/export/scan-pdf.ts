@@ -17,6 +17,7 @@ export interface ScanPdfReport {
   companyNameInput: string | null;
   scannedAt: Date | null;
   technologies: Array<{ name: string; category: string; evidence: string }>;
+  domainInfo: { domain: string; registrar: string | null; registeredAt: Date | null; domainAgeDays: number | null; lookupSucceeded: boolean } | null;
   seoAudit: { seoScore: number; findings: unknown } | null;
   performanceAudit: { performanceScore: number; findings: unknown } | null;
   securityAudit: { securityScore: number; findings: unknown } | null;
@@ -31,6 +32,7 @@ export interface ScanPdfReport {
   } | null;
   executiveReport: {
     executiveSummary: string;
+    businessPurposeSummary: string;
     strengths: string[];
     weaknesses: string[];
     businessOpportunities: string[];
@@ -75,10 +77,28 @@ export async function scanReportToPdfBuffer(report: ScanPdfReport): Promise<Buff
     doc.fillColor("#000000");
   }
 
+  if (report.domainInfo?.lookupSucceeded) {
+    doc.fontSize(13).text("Domain Registration (real RDAP lookup)");
+    doc.fontSize(10).fillColor("#333333");
+    doc.text(
+      `${report.domainInfo.domain}${report.domainInfo.registrar ? ` · Registrar: ${report.domainInfo.registrar}` : ""}${
+        report.domainInfo.registeredAt ? ` · Registered: ${report.domainInfo.registeredAt.toLocaleDateString()}` : ""
+      }${report.domainInfo.domainAgeDays !== null ? ` · Age: ${report.domainInfo.domainAgeDays} days` : ""}`,
+    );
+    doc.moveDown(0.8);
+    doc.fillColor("#000000");
+  }
+
   if (report.executiveReport) {
     doc.fontSize(13).text("Executive Summary (AI-generated)");
     doc.fontSize(10).fillColor("#333333").text(report.executiveReport.executiveSummary);
     doc.moveDown(0.6);
+
+    if (report.executiveReport.businessPurposeSummary) {
+      doc.fillColor("#000000").fontSize(11).text("What This Business Does");
+      doc.fontSize(10).fillColor("#333333").text(report.executiveReport.businessPurposeSummary);
+      doc.moveDown(0.4);
+    }
 
     if (report.executiveReport.strengths.length) {
       doc.fillColor("#000000").fontSize(11).text("Strengths");

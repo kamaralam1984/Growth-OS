@@ -22,6 +22,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     where: { id },
     include: {
       technologies: true,
+      domainInfo: true,
       seoAudit: true,
       performanceAudit: true,
       securityAudit: true,
@@ -73,6 +74,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     companyNameInput: scan.companyNameInput,
     scannedAt: scan.scannedAt,
     technologies: scan.technologies.map((t) => ({ name: t.name, category: t.category, evidence: t.evidence })),
+    domainInfo: scan.domainInfo
+      ? { domain: scan.domainInfo.domain, registrar: scan.domainInfo.registrar, registeredAt: scan.domainInfo.registeredAt, domainAgeDays: scan.domainInfo.domainAgeDays, lookupSucceeded: scan.domainInfo.lookupSucceeded }
+      : null,
     seoAudit: scan.seoAudit ? { seoScore: scan.seoAudit.seoScore, findings: scan.seoAudit.findings } : null,
     performanceAudit: scan.performanceAudit ? { performanceScore: scan.performanceAudit.performanceScore, findings: scan.performanceAudit.findings } : null,
     securityAudit: scan.securityAudit ? { securityScore: scan.securityAudit.securityScore, findings: scan.securityAudit.findings } : null,
@@ -90,6 +94,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     executiveReport: scan.executiveReport
       ? {
           executiveSummary: scan.executiveReport.executiveSummary,
+          businessPurposeSummary: scan.executiveReport.businessPurposeSummary,
           strengths: scan.executiveReport.strengths,
           weaknesses: scan.executiveReport.weaknesses,
           businessOpportunities: scan.executiveReport.businessOpportunities,
