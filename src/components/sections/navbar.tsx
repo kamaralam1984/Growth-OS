@@ -45,10 +45,26 @@ const PRODUCT_LINKS = [
     href: "/product#security",
     description: "How we protect your workspace and data.",
   },
+  {
+    label: "Trust Center",
+    href: "/trust",
+    description: "Compliance readiness, access control, and infrastructure — in detail.",
+  },
+  {
+    label: "AI Runtime",
+    href: "/ai-runtime",
+    description: "How the AI infrastructure actually works — providers, failover, queues.",
+  },
+  {
+    label: "Admin Platform",
+    href: "/admin-platform",
+    description: "Security, compliance, billing, and platform operations tooling.",
+  },
 ] as const;
 
 const NAV_LINKS = [
-  { label: "Security", href: "/product#security" },
+  { label: "Trust Center", href: "/trust" },
+  { label: "AI Runtime", href: "/ai-runtime" },
   { label: "FAQ", href: "/product#faq" },
 ] as const;
 
