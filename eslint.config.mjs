@@ -23,6 +23,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Standalone Node CLI (cli/kvl.js) — plain CommonJS by design so it
+    // runs directly with `node cli/kvl.js` with no build step, not part of
+    // the Next.js app bundle these TypeScript-oriented rules target.
+    "cli/**",
   ]),
 ]);
 

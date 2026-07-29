@@ -59,3 +59,4 @@ next-env.d.ts
 # real database dumps produced by scripts/backup-database.sh — never checked in
 # (this repo is public; a committed dump would leak real data)
 /storage/backups
+__pycache__/

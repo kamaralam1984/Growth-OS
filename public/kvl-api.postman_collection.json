@@ -1,0 +1,178 @@
+{
+  "info": {
+    "name": "KVL GrowthOS API",
+    "description": "The real, current public API surface of KVL GrowthOS: trigger a workflow run, and bulk-export your organization's companies, deals, and contacts. All requests use a bearer API key created at /dashboard/settings/api-manager. Errors always use the shape { \"error\": \"<message>\" }.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "kvl-growthos-api-v0-1-0"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://growthos.kvlbusinesssolutions.com",
+      "type": "string"
+    },
+    {
+      "key": "apiKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "workflowId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{apiKey}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Workflows",
+      "item": [
+        {
+          "name": "Trigger workflow run",
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{apiKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/workflows/{{workflowId}}/trigger",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "workflows", "{{workflowId}}", "trigger"]
+            },
+            "description": "Triggers a real run of the given workflow (must belong to the API key's organization and be ACTIVE). Requires the `workflows:trigger` scope. The optional JSON body is merged into the run's triggerPayload. Returns 202 { \"runId\": string } on success."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Export",
+      "item": [
+        {
+          "name": "Export companies",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{apiKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/export/companies?format=csv",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "export", "companies"],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "csv",
+                  "description": "csv | crm | excel | pdf (unrecognized values fall back to csv)"
+                }
+              ]
+            },
+            "description": "Exports every company in the API key's organization (no pagination/filtering/sorting). Requires the `export:companies:read` scope."
+          },
+          "response": []
+        },
+        {
+          "name": "Export deals",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{apiKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/export/deals?format=csv",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "export", "deals"],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "csv",
+                  "description": "csv | excel | pdf (unrecognized values fall back to csv)"
+                }
+              ]
+            },
+            "description": "Exports every deal in the API key's organization (no pagination/filtering/sorting). Requires the `export:deals:read` scope."
+          },
+          "response": []
+        },
+        {
+          "name": "Export contacts",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{apiKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/export/contacts?format=csv",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "export", "contacts"],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "csv",
+                  "description": "csv | excel | pdf (unrecognized values fall back to csv)"
+                }
+              ]
+            },
+            "description": "Exports every contact in the API key's organization (no pagination/filtering/sorting). Requires the `export:contacts:read` scope."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

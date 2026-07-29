@@ -2,6 +2,9 @@
   "name": "kvl-growthos",
   "version": "0.1.0",
   "private": true,
+  "bin": {
+    "kvl": "./cli/kvl.js"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -52,6 +55,7 @@
     "exceljs": "^4.4.0",
     "framer-motion": "^12.42.2",
     "gpt-tokenizer": "^3.4.0",
+    "graphql": "^16.14.2",
     "gsap": "^3.15.0",
     "ioredis": "^5.11.1",
     "jszip": "^3.10.1",

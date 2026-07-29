@@ -1,0 +1,326 @@
+openapi: 3.0.3
+info:
+  title: KVL GrowthOS API
+  version: "0.1.0"
+  description: >-
+    The real, current public API surface of KVL GrowthOS. This document
+    covers exactly the 4 endpoints that exist today — programmatically
+    triggering a workflow run, and bulk-exporting your organization's
+    companies, deals, and contacts. There is no pagination, filtering, or
+    sorting on the export endpoints; each call returns the organization's
+    full dataset in the requested format. Authentication is a single
+    scheme: a bearer API key created at /dashboard/settings/api-manager,
+    scoped to exactly the operations it is allowed to call, and rate
+    limited per key (default 1,000 requests/hour, configurable per key at
+    creation). Every error response, regardless of endpoint, uses the same
+    `{ "error": "<message>" }` JSON shape.
+servers:
+  - url: https://growthos.kvlbusinesssolutions.com
+    description: Production
+security:
+  - bearerAuth: []
+tags:
+  - name: Workflows
+    description: Programmatically trigger automation workflow runs.
+  - name: Export
+    description: Bulk export of your organization's CRM data.
+paths:
+  /api/v1/workflows/{workflowId}/trigger:
+    post:
+      tags:
+        - Workflows
+      operationId: triggerWorkflow
+      summary: Trigger a workflow run
+      description: >-
+        Starts a real run of the given workflow, exactly as if the
+        workflow's "Run now" button had been clicked in the dashboard. The
+        workflow must belong to the API key's own organization and must be
+        in `ACTIVE` status; it must also have a real TRIGGER step. The
+        optional JSON request body is merged into the run's
+        `triggerPayload` (with server-set `triggeredBy: "api_key"` and
+        `triggeredAt` fields added). Requires the `workflows:trigger`
+        scope.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workflowId
+          in: path
+          required: true
+          description: ID of the workflow to trigger.
+          schema:
+            type: string
+      requestBody:
+        required: false
+        description: >-
+          Optional JSON object. Its shape is defined by the workflow's own
+          TRIGGER step, not by this API. If sent, the body must be a JSON
+          object (not an array or primitive) or the request is rejected
+          with 400.
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              example:
+                dealId: "clx1a2b3c4d5"
+      responses:
+        "202":
+          description: Workflow run started.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TriggerWorkflowResponse"
+        "400":
+          description: >-
+            Missing workflow id, or the request body was present but was
+            not valid JSON / not a JSON object.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing or invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The API key does not have the `workflows:trigger` scope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            No workflow with this ID exists in the API key's organization.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The workflow exists but is not `ACTIVE`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: This API key's rate limit has been exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: The workflow run could not be started.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/export/companies:
+    get:
+      tags:
+        - Export
+      operationId: exportCompanies
+      summary: Export companies
+      description: >-
+        Exports every company in the API key's organization. Returns the
+        full dataset in one response — there is no pagination, filtering,
+        or sorting. Requires the `export:companies:read` scope.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: format
+          in: query
+          required: false
+          description: >-
+            Export format. Any value other than `csv`, `crm`, `excel`, or
+            `pdf` silently falls back to `csv`. `crm` is a CSV with columns
+            re-mapped for common external CRM imports.
+          schema:
+            type: string
+            enum: [csv, crm, excel, pdf]
+            default: csv
+      responses:
+        "200":
+          description: Export file. Content-Type depends on `format`.
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: Missing or invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The API key does not have the `export:companies:read` scope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: This API key's rate limit has been exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/export/deals:
+    get:
+      tags:
+        - Export
+      operationId: exportDeals
+      summary: Export deals
+      description: >-
+        Exports every deal in the API key's organization. Returns the full
+        dataset in one response — there is no pagination, filtering, or
+        sorting. Requires the `export:deals:read` scope.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: format
+          in: query
+          required: false
+          description: >-
+            Export format. Any value other than `csv`, `excel`, or `pdf`
+            silently falls back to `csv`. Unlike the companies export,
+            there is no `crm` format for deals.
+          schema:
+            type: string
+            enum: [csv, excel, pdf]
+            default: csv
+      responses:
+        "200":
+          description: Export file. Content-Type depends on `format`.
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: Missing or invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The API key does not have the `export:deals:read` scope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: This API key's rate limit has been exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/export/contacts:
+    get:
+      tags:
+        - Export
+      operationId: exportContacts
+      summary: Export contacts
+      description: >-
+        Exports every contact in the API key's organization. Returns the
+        full dataset in one response — there is no pagination, filtering,
+        or sorting. Requires the `export:contacts:read` scope.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: format
+          in: query
+          required: false
+          description: >-
+            Export format. Any value other than `csv`, `excel`, or `pdf`
+            silently falls back to `csv`. Unlike the companies export,
+            there is no `crm` format for contacts.
+          schema:
+            type: string
+            enum: [csv, excel, pdf]
+            default: csv
+      responses:
+        "200":
+          description: Export file. Content-Type depends on `format`.
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: Missing or invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The API key does not have the `export:contacts:read` scope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: This API key's rate limit has been exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >-
+        Raw API key created at /dashboard/settings/api-manager, sent as
+        `Authorization: Bearer <key>`. Each key carries its own scopes and
+        its own rate limit (default 1,000 requests/hour, rolling 1-hour
+        window).
+  schemas:
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+      example:
+        error: "Rate limit exceeded."
+    TriggerWorkflowResponse:
+      type: object
+      required:
+        - runId
+      properties:
+        runId:
+          type: string
+          description: ID of the newly started workflow run.
+      example:
+        runId: "clx9y8z7w6v5"

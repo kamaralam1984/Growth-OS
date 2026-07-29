@@ -60,11 +60,16 @@ const PRODUCT_LINKS = [
     href: "/admin-platform",
     description: "Security, compliance, billing, and platform operations tooling.",
   },
+  {
+    label: "Developers",
+    href: "/developers",
+    description: "REST API, GraphQL, SDKs, CLI, webhooks, and a live playground.",
+  },
 ] as const;
 
 const NAV_LINKS = [
+  { label: "Developers", href: "/developers" },
   { label: "Trust Center", href: "/trust" },
-  { label: "AI Runtime", href: "/ai-runtime" },
   { label: "FAQ", href: "/product#faq" },
 ] as const;
 

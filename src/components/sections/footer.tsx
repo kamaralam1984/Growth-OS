@@ -20,6 +20,7 @@ const LINK_GROUPS = [
       { label: "Trust Center", href: "/trust" },
       { label: "AI Runtime", href: "/ai-runtime" },
       { label: "Admin Platform", href: "/admin-platform" },
+      { label: "Developers", href: "/developers" },
     ],
   },
   {
