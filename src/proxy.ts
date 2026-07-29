@@ -50,10 +50,26 @@ import { clientIpFromHeaders } from "@/lib/security/client-ip";
  *     browsers making same-origin requests; they carry no `Origin` header
  *     under normal use. (These are also GET-only today, so the non-GET
  *     check below wouldn't touch them regardless.)
+ *   - `/api/v1/*`, `/api/export/*`, `/api/graphql` — the public,
+ *     Bearer-token-authenticated developer API (see
+ *     src/lib/developer-platform-content.ts and /developers). External
+ *     CLI/SDK/third-party clients are cross-origin by definition; a
+ *     same-origin check would block every real API client. Authenticity
+ *     here comes from `verifyApiKeyAuth`'s bcrypt-checked bearer token, not
+ *     from same-origin-ness — this was missed when that API was first
+ *     built and caught by a live production test immediately after.
  */
 const PROTECTED_PREFIXES = ["/profile", "/company", "/onboarding"];
 
-const CSRF_EXEMPT_PREFIXES = ["/api/webhooks/", "/api/auth/", "/api/outreach/track/", "/api/documents/track/"];
+const CSRF_EXEMPT_PREFIXES = [
+  "/api/webhooks/",
+  "/api/auth/",
+  "/api/outreach/track/",
+  "/api/documents/track/",
+  "/api/v1/",
+  "/api/export/",
+  "/api/graphql",
+];
 
 function isProtectedPath(pathname: string): boolean {
   return PROTECTED_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
