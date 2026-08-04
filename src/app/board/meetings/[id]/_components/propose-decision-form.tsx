@@ -17,6 +17,10 @@ const EMPTY: CreateDecisionInput = { topic: "", description: "", category: "GENE
 export function ProposeDecisionForm({ meetingId }: { meetingId: string }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<CreateDecisionInput>(EMPTY);
+  // Kept as a plain string, not merged into `form`, since CreateDecisionInput
+  // coerces this field from unknown — a controlled <input> needs a stable
+  // string value, converted to a real number (or omitted) on submit.
+  const [financialImpact, setFinancialImpact] = useState("");
   const [result, setResult] = useState<ActionResult | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -28,10 +32,14 @@ export function ProposeDecisionForm({ meetingId }: { meetingId: string }) {
     e.preventDefault();
     setResult(null);
     startTransition(async () => {
-      const res = await proposeDecision(meetingId, form);
+      const res = await proposeDecision(meetingId, {
+        ...form,
+        financialImpact: financialImpact.trim() ? Number(financialImpact) : undefined,
+      });
       setResult(res);
       if (res.ok) {
         setForm(EMPTY);
+        setFinancialImpact("");
         setOpen(false);
       }
     });
@@ -77,6 +85,17 @@ export function ProposeDecisionForm({ meetingId }: { meetingId: string }) {
                 </option>
               ))}
             </Select>
+          </FormField>
+          <FormField label="Financial impact (optional)" htmlFor="decision-financial-impact">
+            <Input
+              id="decision-financial-impact"
+              type="number"
+              min="0"
+              step="0.01"
+              value={financialImpact}
+              onChange={(e) => setFinancialImpact(e.target.value)}
+              placeholder="e.g. 250000 — high-value decisions get flagged HIGH risk automatically"
+            />
           </FormField>
           <FormField label="Description" htmlFor="decision-description">
             <textarea

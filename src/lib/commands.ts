@@ -111,6 +111,8 @@ export async function runAICommand(
     agentType: agent.type as ExecutiveAgentType,
     agentName: agent.name,
     task,
+    organizationId,
+    contextQuery: task,
   });
 
   return { content: result.content };

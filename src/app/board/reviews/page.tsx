@@ -9,6 +9,7 @@ import { Card, CardContent, CardTitle, CardDescription } from "@/components/ui/c
 import { Badge } from "@/components/ui/badge";
 import { AnimatedCounter } from "@/components/ui/animated-counter";
 import { formatRelativeTime } from "@/lib/utils";
+import { getLatestCalibration, type CalibrationBand } from "@/lib/ai/prediction-calibration";
 import type { MeetingStatus, DocumentKind } from "@/generated/prisma/client";
 
 const STATUS_BADGE: Record<MeetingStatus, { label: string; variant: "default" | "secondary" | "outline" | "accent" }> = {
@@ -50,7 +51,7 @@ export default async function ReviewsPage() {
   const organizationId = membership.organizationId;
   const todayStart = startOfToday();
 
-  const [reviews, todayCount, pendingCount, approvedCount, rejectedCount, profitAnalyses, recommendationsCount] = await Promise.all([
+  const [reviews, todayCount, pendingCount, approvedCount, rejectedCount, profitAnalyses, recommendationsCount, calibration] = await Promise.all([
     prisma.boardReview.findMany({
       where: { organizationId },
       orderBy: { createdAt: "desc" },
@@ -62,6 +63,7 @@ export default async function ReviewsPage() {
     prisma.boardReview.count({ where: { organizationId, finalDecision: "REJECTED" } }),
     prisma.profitAnalysis.findMany({ where: { boardReview: { organizationId } }, select: { grossMargin: true } }),
     prisma.recommendation.count({ where: { organizationId, relatedMeetingId: { not: null } } }),
+    getLatestCalibration(organizationId),
   ]);
 
   const reviewsWithWinProb = reviews.filter((r) => r.winProbability != null);
@@ -120,6 +122,37 @@ export default async function ReviewsPage() {
             </CardContent>
           </Card>
         </div>
+
+        <section className="flex flex-col gap-3">
+          <h2 className="text-lg font-semibold tracking-tight text-foreground">Prediction Calibration</h2>
+          {calibration ? (
+            <Card>
+              <CardContent className="flex flex-col gap-4 p-6">
+                <p className="text-sm text-muted-foreground">{calibration.summary}</p>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                  {(calibration.bandsJson as unknown as CalibrationBand[]).map((band) => (
+                    <div key={band.label} className="rounded-lg border border-border p-3">
+                      <p className="text-xs text-muted-foreground">{band.label} estimated</p>
+                      <p className="mt-1 text-xl font-semibold text-foreground">
+                        {band.actualWinRate != null ? `${Math.round(band.actualWinRate)}%` : "—"}
+                      </p>
+                      <p className="text-xs text-muted-foreground">actual win rate (n={band.sampleSize})</p>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card>
+              <CardContent className="flex flex-col items-center gap-2 py-10 text-center">
+                <CardDescription>
+                  Not enough historical data yet — calibration needs at least 10 real proposals with a known outcome (accepted or
+                  rejected). Check back once more proposals have closed.
+                </CardDescription>
+              </CardContent>
+            </Card>
+          )}
+        </section>
 
         <section className="flex flex-col gap-4">
           <h2 className="text-lg font-semibold tracking-tight text-foreground">Reviews</h2>

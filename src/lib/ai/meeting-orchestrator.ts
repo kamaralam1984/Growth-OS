@@ -5,9 +5,46 @@ import { emailOrganizationOwners } from "@/lib/email";
 import { evaluateAutomationRules } from "@/lib/automation-engine";
 import { fireWorkflowTrigger } from "@/lib/workflows/triggers";
 import { AIBillingError, isAIBillingError } from "@/lib/ai/client";
-import { runAgentVote, runMeetingAgentTurn, runMeetingNotesTurn, storeAgentMemory } from "@/lib/ai/agent-runtime";
+import {
+  runAgentVote,
+  runMeetingAgentTurn,
+  runMeetingNotesTurn,
+  storeAgentMemory,
+  type MeetingActionItem,
+  type MeetingBlocker,
+} from "@/lib/ai/agent-runtime";
 import { EXECUTIVE_AGENT_TYPES, type ExecutiveAgentType } from "@/lib/ai/personas";
 import type { AIAgentInstance, DecisionStatus, VoteChoice, Prisma } from "@/generated/prisma/client";
+
+// Decision categories where getting it wrong genuinely costs money or a
+// client relationship — used to deterministically set Decision.riskLevel
+// (a real, previously-dead schema column) rather than leaving escalation
+// entirely up to each agent's free-choice vote.
+const HIGH_STAKES_DECISION_CATEGORIES = new Set([
+  "PROPOSAL_APPROVAL",
+  "QUOTATION_APPROVAL",
+  "CONTRACT_APPROVAL",
+  "INVOICE_APPROVAL",
+  "ISSUE_ESCALATION",
+]);
+
+// A financial impact above this (in the org's currency's smallest common
+// unit of "a lot") also forces HIGH risk, regardless of category.
+const HIGH_STAKES_FINANCIAL_IMPACT_THRESHOLD = 100_000;
+
+/**
+ * Deterministic — not AI-guessed — risk classification for a proposed
+ * Decision, called from proposeDecision (board/meetings/[id]/actions.ts) at
+ * creation time. Feeds Decision.riskLevel, a real schema column that
+ * existed but was never set or read anywhere before this. Returns null
+ * (leave riskLevel unset) when neither signal applies — we don't invent a
+ * LOW/MEDIUM rating for the common case, only flag genuine high stakes.
+ */
+export function computeDecisionRiskLevel(category: string, financialImpact?: number | null): "HIGH" | null {
+  if (HIGH_STAKES_DECISION_CATEGORIES.has(category)) return "HIGH";
+  if (financialImpact != null && financialImpact >= HIGH_STAKES_FINANCIAL_IMPACT_THRESHOLD) return "HIGH";
+  return null;
+}
 
 function isExecutiveAgentType(type: string): type is ExecutiveAgentType {
   return (EXECUTIVE_AGENT_TYPES as readonly string[]).includes(type);
@@ -128,6 +165,8 @@ export async function runMeetingRound(meetingId: string): Promise<void> {
         agentName: agent.name,
         task,
         conversationContext: conversationContext || undefined,
+        organizationId: meeting.organizationId,
+        contextQuery: task,
       });
     } catch (error) {
       if (isAIBillingError(error)) {
@@ -216,6 +255,22 @@ export async function runMeetingDecisionVote(decisionId: string): Promise<void> 
     ? decision.meeting.messages.map(formatMessageLine).join("\n") || undefined
     : undefined;
 
+  // Ground each agent's free-choice ESCALATE vote in the real, deterministic
+  // signals already sitting on Decision (category always present;
+  // riskLevel/financialImpact set by computeDecisionRiskLevel at proposal
+  // time, or supplied directly) instead of leaving escalation purely to
+  // vibes. The tally rule itself (any ESCALATE wins) is untouched below.
+  const riskContext =
+    decision.riskLevel || decision.financialImpact != null
+      ? [
+          `Category: ${decision.category}.`,
+          decision.riskLevel ? `Risk level: ${decision.riskLevel}.` : null,
+          decision.financialImpact != null ? `Financial impact: ${decision.financialImpact}.` : null,
+        ]
+          .filter(Boolean)
+          .join(" ")
+      : undefined;
+
   let voteResults: Array<{ agent: AIAgentInstance; vote: VoteChoice; reasoning: string }>;
   try {
     voteResults = await Promise.all(
@@ -227,6 +282,9 @@ export async function runMeetingDecisionVote(decisionId: string): Promise<void> 
           topic: decision.topic,
           description: decision.description ?? undefined,
           conversationContext,
+          riskContext,
+          organizationId: decision.organizationId,
+          contextQuery: decision.topic,
         });
         return { agent, vote: result.vote, reasoning: result.reasoning };
       }),
@@ -316,19 +374,25 @@ export async function runMeetingDecisionVote(decisionId: string): Promise<void> 
   }
 }
 
-/** Flattens the five structured note sections into the plain-text `Meeting.summary` field, for anything that only reads that. */
+/** Flattens the six structured note sections into the plain-text `Meeting.summary` field, for anything that only reads that. */
 function flattenMeetingNotes(notes: {
   summary: string;
-  actionItems: string[];
+  actionItems: MeetingActionItem[];
   risks: string[];
+  blockers: MeetingBlocker[];
   recommendations: string[];
   nextSteps: string[];
 }): string {
   const section = (label: string, items: string[]) => (items.length > 0 ? `\n\n${label}:\n${items.map((i) => `- ${i}`).join("\n")}` : "");
+  const actionItemLines = notes.actionItems.map(
+    (item) => `${item.title} — Owner: ${item.owner}, Priority: ${item.priority}, Due in ${item.dueInDays}d, KPI: ${item.kpi}, Expected impact: ${item.expectedImpact}`,
+  );
+  const blockerLines = notes.blockers.map((b) => `${b.description} — Proposed solution: ${b.proposedSolution}`);
   return (
     notes.summary +
-    section("Action items", notes.actionItems) +
+    section("Action items", actionItemLines) +
     section("Risks", notes.risks) +
+    section("Blockers", blockerLines) +
     section("Recommendations", notes.recommendations) +
     section("Next steps", notes.nextSteps)
   );
@@ -372,6 +436,7 @@ export async function generateMeetingSummary(meetingId: string): Promise<string>
       agentType: summarizer.type as ExecutiveAgentType,
       agentName: summarizer.name,
       transcript,
+      organizationId: meeting.organizationId,
     });
   } catch (error) {
     if (isAIBillingError(error)) {
@@ -408,6 +473,34 @@ export async function generateMeetingSummary(meetingId: string): Promise<string>
     },
   });
 
+  // Turn the AI's structured execution plan into real ActionItem rows —
+  // Task/Owner/Priority/Deadline/KPI/Expected-Impact, not just narrative
+  // strings a human has to manually track one at a time. Owner "HUMAN"
+  // (or an agent type not actually provisioned for this org) leaves both
+  // assignee columns null — visibly unassigned rather than guessed.
+  if (notes.actionItems.length > 0) {
+    const orgAgents = await prisma.aIAgentInstance.findMany({
+      where: { organizationId: meeting.organizationId, active: true, type: { in: EXECUTIVE_AGENT_TYPES } },
+      select: { id: true, type: true },
+    });
+    const agentIdByType = new Map(orgAgents.map((a) => [a.type, a.id]));
+
+    for (const item of notes.actionItems) {
+      await prisma.actionItem.create({
+        data: {
+          organizationId: meeting.organizationId,
+          meetingId,
+          title: item.title,
+          dueDate: new Date(Date.now() + item.dueInDays * 86_400_000),
+          priority: item.priority,
+          kpi: item.kpi,
+          expectedImpact: item.expectedImpact,
+          assignedToAgentId: item.owner === "HUMAN" ? null : (agentIdByType.get(item.owner) ?? null),
+        },
+      });
+    }
+  }
+
   await logActivity({
     organizationId: meeting.organizationId,
     type: "MEETING",
@@ -422,7 +515,8 @@ export async function generateMeetingSummary(meetingId: string): Promise<string>
   const memoryContent = [
     `Meeting "${meeting.title}": ${notes.summary}`,
     notes.risks.length ? `Risks: ${notes.risks.join("; ")}` : null,
-    notes.actionItems.length ? `Action items: ${notes.actionItems.join("; ")}` : null,
+    notes.blockers.length ? `Blockers: ${notes.blockers.map((b) => b.description).join("; ")}` : null,
+    notes.actionItems.length ? `Action items: ${notes.actionItems.map((i) => `${i.title} (${i.owner})`).join("; ")}` : null,
   ]
     .filter(Boolean)
     .join(" ")
@@ -442,8 +536,13 @@ export async function generateMeetingSummary(meetingId: string): Promise<string>
     subject: `Meeting ended: ${meeting.title}`,
     text: [
       notes.summary,
-      notes.actionItems.length ? `\nAction items:\n${notes.actionItems.map((i) => `- ${i}`).join("\n")}` : "",
+      notes.actionItems.length
+        ? `\nAction items:\n${notes.actionItems.map((i) => `- ${i.title} (Owner: ${i.owner}, Due in ${i.dueInDays}d, KPI: ${i.kpi})`).join("\n")}`
+        : "",
       notes.risks.length ? `\nRisks:\n${notes.risks.map((i) => `- ${i}`).join("\n")}` : "",
+      notes.blockers.length
+        ? `\nBlockers:\n${notes.blockers.map((b) => `- ${b.description} (Proposed solution: ${b.proposedSolution})`).join("\n")}`
+        : "",
       notes.nextSteps.length ? `\nNext steps:\n${notes.nextSteps.map((i) => `- ${i}`).join("\n")}` : "",
     ].join(""),
   });

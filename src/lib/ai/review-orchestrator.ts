@@ -14,6 +14,7 @@ import {
   type LegalReviewTurnResult,
 } from "@/lib/ai/agent-runtime";
 import { REVIEW_BOARD_AGENT_TYPES, getReviewBoardPersonas, type ExecutiveAgentType } from "@/lib/ai/personas";
+import { getLatestCalibration, formatCalibrationContext } from "@/lib/ai/prediction-calibration";
 import { resolveDocumentById } from "@/app/dashboard/proposal/_lib/document-resolver";
 import type { DocumentBlueprint } from "@/lib/documents";
 import type {
@@ -288,6 +289,14 @@ export async function runReviewRound(boardReviewId: string): Promise<void> {
   const byType = new Map(agentParticipants.map((agent) => [agent.type as ExecutiveAgentType, agent]));
   const orderedAgents = REVIEW_SPEAKING_ORDER.map((type) => byType.get(type)).filter((agent): agent is AIAgentInstance => Boolean(agent));
 
+  // Real self-improvement feedback: the board's most recent win-probability
+  // calibration (src/lib/ai/prediction-calibration.ts), computed nightly
+  // from real terminal Proposal outcomes. undefined when there isn't yet
+  // enough real history — agents estimate winProbability with no calibration
+  // text at all in that case, never a fabricated one.
+  const latestCalibration = await getLatestCalibration(boardReview.organizationId);
+  const calibrationContext = formatCalibrationContext(latestCalibration);
+
   let conversationContext = meeting.messages.map(formatMessageLine).join("\n");
 
   for (const agent of orderedAgents) {
@@ -307,6 +316,9 @@ export async function runReviewRound(boardReviewId: string): Promise<void> {
           task,
           conversationContext: conversationContext || undefined,
           specialty: "FINANCE",
+          organizationId: boardReview.organizationId,
+          contextQuery: task,
+          calibrationContext,
         });
       } else if (agentType === "LEGAL") {
         turn = await runReviewAgentTurn({
@@ -316,6 +328,9 @@ export async function runReviewRound(boardReviewId: string): Promise<void> {
           task,
           conversationContext: conversationContext || undefined,
           specialty: "LEGAL",
+          organizationId: boardReview.organizationId,
+          contextQuery: task,
+          calibrationContext,
         });
       } else {
         turn = await runReviewAgentTurn({
@@ -324,6 +339,9 @@ export async function runReviewRound(boardReviewId: string): Promise<void> {
           agentName: agent.name,
           task,
           conversationContext: conversationContext || undefined,
+          organizationId: boardReview.organizationId,
+          contextQuery: task,
+          calibrationContext,
         });
       }
     } catch (error) {
@@ -485,6 +503,8 @@ export async function runReviewVote(boardReviewId: string): Promise<void> {
           topic: meeting.title,
           description: meeting.agenda,
           conversationContext,
+          organizationId: boardReview.organizationId,
+          contextQuery: meeting.title,
         });
         return { agent, vote: result.vote as VoteChoice, reasoning: result.reasoning };
       }),

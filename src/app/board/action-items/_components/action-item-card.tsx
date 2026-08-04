@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { toast } from "@/components/ui/toast";
 import { formatRelativeTime } from "@/lib/utils";
-import type { ActionItemStatus } from "@/generated/prisma/client";
+import type { ActionItemStatus, MessagePriority } from "@/generated/prisma/client";
 import { updateActionItemStatus, promoteActionItemToTask } from "../actions";
 
 export interface BoardActionItem {
@@ -17,6 +17,9 @@ export interface BoardActionItem {
   title: string;
   description: string | null;
   status: ActionItemStatus;
+  priority: MessagePriority;
+  kpi: string | null;
+  expectedImpact: string | null;
   dueDate: string | null;
   createdAt: string;
   taskId: string | null;
@@ -32,6 +35,13 @@ const STATUS_VARIANT: Record<ActionItemStatus, "default" | "secondary" | "outlin
   IN_PROGRESS: "accent",
   DONE: "default",
   CANCELLED: "outline",
+};
+
+const PRIORITY_VARIANT: Record<MessagePriority, "default" | "secondary" | "outline" | "accent"> = {
+  LOW: "outline",
+  NORMAL: "outline",
+  HIGH: "accent",
+  URGENT: "default",
 };
 
 export function ActionItemCard({
@@ -80,7 +90,10 @@ export function ActionItemCard({
       <CardContent className="flex flex-col gap-3 py-5">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <h3 className="text-sm font-semibold text-foreground">{item.title}</h3>
-          <Badge variant={STATUS_VARIANT[item.status]}>{item.status.replace("_", " ")}</Badge>
+          <div className="flex items-center gap-1.5">
+            <Badge variant={PRIORITY_VARIANT[item.priority]}>{item.priority}</Badge>
+            <Badge variant={STATUS_VARIANT[item.status]}>{item.status.replace("_", " ")}</Badge>
+          </div>
         </div>
 
         {item.description && <p className="text-sm text-muted-foreground">{item.description}</p>}
@@ -93,6 +106,13 @@ export function ActionItemCard({
           <span>Created {formatRelativeTime(new Date(item.createdAt))}</span>
           {item.dueDate && <span>Due {new Date(item.dueDate).toLocaleDateString()}</span>}
         </div>
+
+        {(item.kpi || item.expectedImpact) && (
+          <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+            {item.kpi && <span>KPI: {item.kpi}</span>}
+            {item.expectedImpact && <span>Expected impact: {item.expectedImpact}</span>}
+          </div>
+        )}
 
         {(item.meeting || item.decision || item.project) && (
           <div className="flex flex-wrap items-center gap-2 text-xs">

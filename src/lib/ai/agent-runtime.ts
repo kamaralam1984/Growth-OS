@@ -68,10 +68,38 @@ const MeetingTurnSchema = z.object({
 
 export type MeetingTurnResult = z.infer<typeof MeetingTurnSchema>;
 
+// Structured so an execution plan comes out of every meeting directly
+// usable as a real ActionItem row (Task/Owner/Priority/Deadline/KPI/
+// Expected Impact) — no separate free-text-parsing step. dueInDays (not an
+// absolute date) because LLMs are unreliable at date arithmetic; the
+// orchestrator computes the real Date server-side from "now".
+const MeetingActionItemSchema = z.object({
+  // Capped to match createActionItemSchema's ActionItem.title bound
+  // (validations/action-items.ts) — the orchestrator writes this string
+  // verbatim as ActionItem.title, and the UI matches a notesJson entry back
+  // to its real ActionItem row by exact title, so the two must agree.
+  title: z.string().max(300),
+  owner: z.enum(["CEO", "SALES", "MARKETING", "PROPOSAL", "OUTREACH", "HUMAN"]),
+  priority: z.enum(["LOW", "NORMAL", "HIGH", "URGENT"]),
+  dueInDays: z.number().int().min(0).max(90),
+  kpi: z.string().max(300),
+  expectedImpact: z.string().max(500),
+});
+
+export type MeetingActionItem = z.infer<typeof MeetingActionItemSchema>;
+
+const MeetingBlockerSchema = z.object({
+  description: z.string(),
+  proposedSolution: z.string(),
+});
+
+export type MeetingBlocker = z.infer<typeof MeetingBlockerSchema>;
+
 const MeetingNotesSchema = z.object({
   summary: z.string(),
-  actionItems: z.array(z.string()).max(20).default([]),
+  actionItems: z.array(MeetingActionItemSchema).max(20).default([]),
   risks: z.array(z.string()).max(20).default([]),
+  blockers: z.array(MeetingBlockerSchema).max(20).default([]),
   recommendations: z.array(z.string()).max(20).default([]),
   nextSteps: z.array(z.string()).max(20).default([]),
 });
@@ -313,10 +341,14 @@ export async function runAgentTurn(params: {
   // `organizationId` is given, real live CRM/project/meeting/decision/
   // Knowledge Base context is assembled and spliced in alongside memory.
   // Both new params are optional and additive: every existing call site
-  // that omits them behaves byte-for-byte as before. Other turn functions
-  // in this file (runAgentVote, runMeetingAgentTurn, etc.) don't yet take
-  // this hook — adopt the same optional pattern there later if needed,
-  // rather than wiring all ten in one risky sweep.
+  // that omits them behaves byte-for-byte as before. The same pattern is
+  // wired into every other real board/vote/notes/review turn function in
+  // this file (runAgentVote, runMeetingAgentTurn, runMeetingNotesTurn,
+  // runReviewAgentTurn, runReviewVoteTurn, runProjectManagerTurn,
+  // runDeliveryVoteTurn) — deliberately NOT into the external-web-research
+  // turns (runWebSearchDiscovery, runCompanyIntelligenceTurn,
+  // runResearchNoteTurn), where this org's own internal meetings/decisions/
+  // preferences aren't relevant context for researching an outside company.
   organizationId?: string;
   contextQuery?: string;
 }): Promise<{ content: string; usage: { inputTokens: number; outputTokens: number } }> {
@@ -385,6 +417,15 @@ export async function runAgentVote(params: {
   topic: string;
   description?: string;
   conversationContext?: string;
+  // Real, deterministic signal computed by the caller from
+  // Decision.category/riskLevel/financialImpact — not AI-guessed. Grounds
+  // the agent's free-choice ESCALATE vote in actual stakes instead of vibes
+  // alone, without touching the vote-tally logic itself.
+  riskContext?: string;
+  // Same optional Context Engine hook as runAgentTurn (see its doc comment)
+  // — additive, every existing call site that omits these is unaffected.
+  organizationId?: string;
+  contextQuery?: string;
 }): Promise<VoteResult> {
   if (!isAIConnected()) throw new AINotConnectedError();
 
@@ -394,14 +435,22 @@ export async function runAgentVote(params: {
 
   try {
     const memoryContext = await loadAgentMemoryContext(params.agentId);
+    const engineContext = params.organizationId
+      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, clientQuery: params.contextQuery }).catch((error) => {
+          console.error("[agent-runtime] buildAgentContext failed, continuing without it:", error);
+          return "";
+        })
+      : "";
 
     const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". You are being asked to formally vote on a board decision. Vote APPROVE, REJECT, ESCALATE (needs human/CEO judgment), DISCUSS (need more debate first), DELAY (not enough information yet), or DELEGATE (someone else should own this). Give concrete reasoning grounded in your role.`,
       userContent: [
         memoryContext,
+        engineContext || null,
         params.conversationContext ? `Discussion so far:\n${params.conversationContext}` : null,
         `Decision topic: ${params.topic}`,
         params.description ? `Details: ${params.description}` : null,
+        params.riskContext ?? null,
       ]
         .filter(Boolean)
         .join("\n\n"),
@@ -434,6 +483,8 @@ export async function runDeliveryVoteTurn(params: {
   topic: string;
   description?: string;
   conversationContext?: string;
+  organizationId?: string;
+  contextQuery?: string;
 }): Promise<DeliveryVoteResult> {
   if (!isAIConnected()) throw new AINotConnectedError();
 
@@ -443,11 +494,18 @@ export async function runDeliveryVoteTurn(params: {
 
   try {
     const memoryContext = await loadAgentMemoryContext(params.agentId);
+    const engineContext = params.organizationId
+      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, clientQuery: params.contextQuery }).catch((error) => {
+          console.error("[agent-runtime] buildAgentContext failed, continuing without it:", error);
+          return "";
+        })
+      : "";
 
     const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". You are being asked to formally vote on a real AI Delivery Board decision. Vote APPROVE, REJECT, ESCALATE (needs human/CEO judgment — "Require Human Approval"), DISCUSS (need more debate first), DELAY (not enough information yet), DELEGATE (someone else should own this), or REQUEST_REVISION (the plan needs changes before you can approve it). Give concrete reasoning grounded in your role and the real project data you were given.`,
       userContent: [
         memoryContext,
+        engineContext || null,
         params.conversationContext ? `Discussion so far:\n${params.conversationContext}` : null,
         `Decision topic: ${params.topic}`,
         params.description ? `Details: ${params.description}` : null,
@@ -488,6 +546,8 @@ export async function runMeetingAgentTurn(params: {
   // (Phase 5) passes its own label so agents aren't told they're in the
   // wrong boardroom.
   meetingLabel?: string;
+  organizationId?: string;
+  contextQuery?: string;
 }): Promise<MeetingTurnResult & { usage: { inputTokens: number; outputTokens: number } }> {
   if (!isAIConnected()) throw new AINotConnectedError();
 
@@ -498,11 +558,18 @@ export async function runMeetingAgentTurn(params: {
   try {
     const memoryContext = await loadAgentMemoryContext(params.agentId);
     const meetingLabel = params.meetingLabel ?? "AI Executive Board meeting";
+    const engineContext = params.organizationId
+      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, clientQuery: params.contextQuery }).catch((error) => {
+          console.error("[agent-runtime] buildAgentContext failed, continuing without it:", error);
+          return "";
+        })
+      : "";
 
     const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". You are speaking in a live ${meetingLabel} (a real boardroom, not a chat). Alongside your actual contribution ("content"), honestly self-report: your priority for this point (LOW/NORMAL/HIGH/URGENT), your genuine confidence in it (0-100 — vary this based on how sure you actually are, never a fixed number), an optional one-line "suggestedAction" if someone should concretely act on this, and optional "evidence" — a specific fact, figure, or piece of reasoning backing your point (omit if you don't have any).`,
       userContent: [
         memoryContext,
+        engineContext || null,
         params.conversationContext ? `Conversation so far:\n${params.conversationContext}` : null,
         `Your task now: ${params.task}`,
       ]
@@ -527,17 +594,18 @@ export async function runMeetingAgentTurn(params: {
 }
 
 /**
- * Structured end-of-meeting notes — summary, action items, risks,
- * recommendations, next steps — as five real, independently-rendered
- * sections instead of one prose blob. Same honest-or-nothing rule as
- * everywhere else: an empty array means the agent genuinely found nothing
- * for that section, not a placeholder.
+ * Structured end-of-meeting notes — summary, a real execution plan
+ * (actionItems), risks, blockers, recommendations, next steps — as six
+ * real, independently-rendered sections instead of one prose blob. Same
+ * honest-or-nothing rule as everywhere else: an empty array means the
+ * agent genuinely found nothing for that section, not a placeholder.
  */
 export async function runMeetingNotesTurn(params: {
   agentId: string;
   agentType: ExecutiveAgentType;
   agentName: string;
   transcript: string;
+  organizationId?: string;
 }): Promise<MeetingNotes & { usage: { inputTokens: number; outputTokens: number } }> {
   if (!isAIConnected()) throw new AINotConnectedError();
 
@@ -546,9 +614,16 @@ export async function runMeetingNotesTurn(params: {
   await setAgentStatus(params.agentId, "ANALYZING", "Writing meeting notes");
 
   try {
+    const engineContext = params.organizationId
+      ? await buildAgentContext(params.organizationId, { agentId: params.agentId }).catch((error) => {
+          console.error("[agent-runtime] buildAgentContext failed, continuing without it:", error);
+          return "";
+        })
+      : "";
+
     const result = await generateStructured({
-      system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". Write the official record for this AI Executive Board meeting from its full transcript: a concise "summary" (3-6 sentences), and four separate lists — "actionItems" (concrete assignments made), "risks" (real concerns raised), "recommendations" (suggestions made), "nextSteps" (what happens next). Leave any list empty if the transcript genuinely didn't cover it — never pad a list to make it look complete.`,
-      userContent: params.transcript || "No discussion took place.",
+      system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". Write the official record for this AI Executive Board meeting from its full transcript: a concise "summary" (3-6 sentences), a real execution-plan list "actionItems" (each a concrete assignment made — "title", "owner" as one of CEO/SALES/MARKETING/PROPOSAL/OUTREACH/HUMAN, "priority" LOW/NORMAL/HIGH/URGENT, "dueInDays" as a small integer number of days from today, "kpi" naming the one metric that proves it worked, and "expectedImpact" stating the concrete business impact — never invent an owner, KPI, or impact the discussion doesn't actually support), "risks" (real concerns raised), "blockers" (each a real thing actually stalling progress right now, with "description" and a concrete "proposedSolution" — leave this list empty if nothing in the transcript is genuinely blocked, never invent a blocker to fill the section), "recommendations" (suggestions made), and "nextSteps" (what happens next). Leave any list empty if the transcript genuinely didn't cover it — never pad a list to make it look complete.`,
+      userContent: [engineContext || null, params.transcript || "No discussion took place."].filter(Boolean).join("\n\n"),
       maxTokens: 2048,
       effort: "low",
       schema: MeetingNotesSchema,
@@ -583,6 +658,9 @@ export async function runReviewAgentTurn(params: {
   task: string;
   conversationContext?: string;
   specialty: "FINANCE";
+  organizationId?: string;
+  contextQuery?: string;
+  calibrationContext?: string;
 }): Promise<FinanceReviewTurnResult & { usage: { inputTokens: number; outputTokens: number } }>;
 export async function runReviewAgentTurn(params: {
   agentId: string;
@@ -591,6 +669,9 @@ export async function runReviewAgentTurn(params: {
   task: string;
   conversationContext?: string;
   specialty: "LEGAL";
+  organizationId?: string;
+  contextQuery?: string;
+  calibrationContext?: string;
 }): Promise<LegalReviewTurnResult & { usage: { inputTokens: number; outputTokens: number } }>;
 export async function runReviewAgentTurn(params: {
   agentId: string;
@@ -599,6 +680,9 @@ export async function runReviewAgentTurn(params: {
   task: string;
   conversationContext?: string;
   specialty?: undefined;
+  organizationId?: string;
+  contextQuery?: string;
+  calibrationContext?: string;
 }): Promise<ReviewTurnResult & { usage: { inputTokens: number; outputTokens: number } }>;
 export async function runReviewAgentTurn(params: {
   agentId: string;
@@ -607,6 +691,15 @@ export async function runReviewAgentTurn(params: {
   task: string;
   conversationContext?: string;
   specialty?: "FINANCE" | "LEGAL";
+  organizationId?: string;
+  contextQuery?: string;
+  // Real historical calibration text (src/lib/ai/prediction-calibration.ts)
+  // — how accurate this board's past winProbability estimates actually
+  // were, banded against real terminal Proposal outcomes. This is the
+  // feedback half of the self-improvement loop: real past outcomes changing
+  // what an agent sees before it estimates a new one. undefined when there
+  // isn't yet enough real data to calibrate against.
+  calibrationContext?: string;
 }): Promise<(ReviewTurnResult | FinanceReviewTurnResult | LegalReviewTurnResult) & { usage: { inputTokens: number; outputTokens: number } }> {
   if (!isAIConnected()) throw new AINotConnectedError();
 
@@ -617,6 +710,12 @@ export async function runReviewAgentTurn(params: {
 
   try {
     const memoryContext = await loadAgentMemoryContext(params.agentId);
+    const engineContext = params.organizationId
+      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, clientQuery: params.contextQuery }).catch((error) => {
+          console.error("[agent-runtime] buildAgentContext failed, continuing without it:", error);
+          return "";
+        })
+      : "";
 
     const specialtyInstruction =
       params.specialty === "FINANCE"
@@ -629,6 +728,8 @@ export async function runReviewAgentTurn(params: {
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". You are one of 8 board members in a real AI Proposal Review Board meeting, reviewing a real document before it goes to a client. Give your honest "opinion" (a few sentences, from your role's perspective), concrete "strengths" and "weaknesses" you actually see (empty arrays are genuinely fine if you don't see any), 0-8 concrete "recommendations" you'd honestly stand behind, a "confidenceScore" (0-100, how confident you are in your own assessment — vary this honestly), and — only if you have a real basis to estimate them — a "winProbability" (0-100) and/or "profitMarginEstimate" (a percent). Omit winProbability/profitMarginEstimate entirely rather than guessing if you don't have grounds for either.${specialtyInstruction}`,
       userContent: [
         memoryContext,
+        engineContext || null,
+        params.calibrationContext ?? null,
         params.conversationContext ? `Discussion so far:\n${params.conversationContext}` : null,
         `Your task now: ${params.task}`,
       ]
@@ -664,6 +765,8 @@ export async function runReviewVoteTurn(params: {
   topic: string;
   description?: string;
   conversationContext?: string;
+  organizationId?: string;
+  contextQuery?: string;
 }): Promise<ReviewVoteResult> {
   if (!isAIConnected()) throw new AINotConnectedError();
 
@@ -673,11 +776,18 @@ export async function runReviewVoteTurn(params: {
 
   try {
     const memoryContext = await loadAgentMemoryContext(params.agentId);
+    const engineContext = params.organizationId
+      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, clientQuery: params.contextQuery }).catch((error) => {
+          console.error("[agent-runtime] buildAgentContext failed, continuing without it:", error);
+          return "";
+        })
+      : "";
 
     const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". You are casting your final formal vote in a real AI Proposal Review Board meeting on whether this document should go to the client. Vote APPROVE (ready to send as-is), APPROVE_WITH_CHANGES (send once the small fixes you name are made), REQUEST_REVISION (needs real rework before it should go out — say what), or REJECT (should not go out at all — say why). Give concrete reasoning grounded in your role, not a generic rubber stamp.`,
       userContent: [
         memoryContext,
+        engineContext || null,
         params.conversationContext ? `Discussion so far:\n${params.conversationContext}` : null,
         `Document under review: ${params.topic}`,
         params.description ? `Details: ${params.description}` : null,
@@ -711,6 +821,11 @@ export async function runProjectManagerTurn(params: {
   agentName: string;
   task: string;
   projectContext: string;
+  organizationId?: string;
+  contextQuery?: string;
+  // Enriches buildAgentContext's project section (milestones/risks/upcoming
+  // tasks) on top of the projectContext string already passed in above.
+  projectId?: string;
 }): Promise<ProjectManagerTurnResult & { usage: { inputTokens: number; outputTokens: number } }> {
   if (!isAIConnected()) throw new AINotConnectedError();
 
@@ -720,10 +835,20 @@ export async function runProjectManagerTurn(params: {
 
   try {
     const memoryContext = await loadAgentMemoryContext(params.agentId);
+    const engineContext = params.organizationId
+      ? await buildAgentContext(params.organizationId, {
+          agentId: params.agentId,
+          projectId: params.projectId,
+          clientQuery: params.contextQuery,
+        }).catch((error) => {
+          console.error("[agent-runtime] buildAgentContext failed, continuing without it:", error);
+          return "";
+        })
+      : "";
 
     const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}". You are analyzing ONE specific real project on your own — not in a meeting, not speaking to other agents. Your task: ${params.task}. Give a concise "summary", a real prioritized list of what matters most right now, honest "riskAssessments" reviewing whatever real risk findings you were given (never invent a new one that isn't grounded in the data below), concrete "recommendations", and — only if the data below genuinely supports it — "suggestedAssignments" for currently-unassigned work. Leave any list empty rather than padding it.`,
-      userContent: [memoryContext, `Real project data:\n${params.projectContext}`].filter(Boolean).join("\n\n"),
+      userContent: [memoryContext, engineContext || null, `Real project data:\n${params.projectContext}`].filter(Boolean).join("\n\n"),
       maxTokens: 2048,
       effort: "medium",
       schema: ProjectManagerTurnSchema,

@@ -98,6 +98,9 @@ export async function createActionItem(input: CreateActionItemInput): Promise<Ac
         assignedToUserId: assigneeUserId,
         assignedToAgentId: assigneeAgentId,
         dueDate: parsed.data.dueDate ?? null,
+        priority: parsed.data.priority,
+        kpi: parsed.data.kpi || null,
+        expectedImpact: parsed.data.expectedImpact || null,
       },
     });
 
@@ -232,6 +235,9 @@ export async function promoteActionItemToTask(id: string): Promise<ActionResult 
           assignedToUserId: actionItem.assignedToUserId,
           assignedToAgentId: actionItem.assignedToAgentId,
           dueDate: actionItem.dueDate,
+          priority: actionItem.priority,
+          kpi: actionItem.kpi,
+          expectedImpact: actionItem.expectedImpact,
         },
       });
       await tx.actionItem.update({

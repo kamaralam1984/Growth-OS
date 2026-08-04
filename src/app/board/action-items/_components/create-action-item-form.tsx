@@ -44,6 +44,9 @@ export function CreateActionItemForm({
   const [assigneeId, setAssigneeId] = useState("");
   const [projectId, setProjectId] = useState("");
   const [dueDate, setDueDate] = useState("");
+  const [priority, setPriority] = useState<CreateActionItemInput["priority"]>("NORMAL");
+  const [kpi, setKpi] = useState("");
+  const [expectedImpact, setExpectedImpact] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -59,6 +62,9 @@ export function CreateActionItemForm({
       assignedToUserId: assigneeKind === "user" ? assigneeId || undefined : undefined,
       projectId: projectId || undefined,
       dueDate: dueDate ? new Date(dueDate) : undefined,
+      priority,
+      kpi: kpi || undefined,
+      expectedImpact: expectedImpact || undefined,
     };
     startTransition(async () => {
       const result = await createActionItem(input);
@@ -74,6 +80,9 @@ export function CreateActionItemForm({
       setAssigneeId("");
       setProjectId("");
       setDueDate("");
+      setPriority("NORMAL");
+      setKpi("");
+      setExpectedImpact("");
       setOpen(false);
     });
   }
@@ -158,6 +167,39 @@ export function CreateActionItemForm({
               <Input id="action-item-due-date" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
             </FormField>
           </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <FormField label="Priority" htmlFor="action-item-priority">
+              <Select
+                id="action-item-priority"
+                value={priority}
+                onChange={(e) => setPriority(e.target.value as CreateActionItemInput["priority"])}
+              >
+                <option value="LOW">Low</option>
+                <option value="NORMAL">Normal</option>
+                <option value="HIGH">High</option>
+                <option value="URGENT">Urgent</option>
+              </Select>
+            </FormField>
+
+            <FormField label="KPI (optional)" htmlFor="action-item-kpi">
+              <Input
+                id="action-item-kpi"
+                value={kpi}
+                onChange={(e) => setKpi(e.target.value)}
+                placeholder="e.g. Reply rate on the follow-up sequence"
+              />
+            </FormField>
+          </div>
+
+          <FormField label="Expected business impact (optional)" htmlFor="action-item-expected-impact">
+            <Input
+              id="action-item-expected-impact"
+              value={expectedImpact}
+              onChange={(e) => setExpectedImpact(e.target.value)}
+              placeholder="e.g. Unblocks 2 stalled deals worth ₹4L"
+            />
+          </FormField>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
 

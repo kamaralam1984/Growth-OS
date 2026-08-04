@@ -122,6 +122,8 @@ export async function runDailyProjectPlanning(projectId: string): Promise<DailyP
       agentName: agent.name,
       task: "Review today's priorities and risks for this project, and recommend next steps.",
       projectContext: built.context,
+      organizationId: built.organizationId,
+      projectId,
     });
 
     await prisma.aIAgentInstance.update({ where: { id: agent.id }, data: { completedTasksCount: { increment: 1 } } });
@@ -166,6 +168,8 @@ export async function generateProjectProgressReport(projectId: string): Promise<
       agentName: agent.name,
       task: "Write a concise, honest progress report for this project suitable for the owner or the client, grounded only in the real data below.",
       projectContext: built.context,
+      organizationId: built.organizationId,
+      projectId,
     });
 
     await logActivity({

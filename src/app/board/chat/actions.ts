@@ -189,6 +189,8 @@ export async function sendAgentMessage(input: SendAgentMessageInput): Promise<Ac
       task: `You've received a direct message on the board's inter-agent channel (reason: "${parsed.data.reason}", priority: ${parsed.data.priority}): "${parsed.data.content}". Reply directly and specifically, as yourself.`,
       conversationContext,
       effort: "medium",
+      organizationId,
+      contextQuery: parsed.data.content,
     });
 
     const reply = await prisma.agentConversation.create({

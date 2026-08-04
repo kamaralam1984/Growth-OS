@@ -209,6 +209,8 @@ export async function runDeliveryBoardRound(meetingId: string): Promise<void> {
         task,
         conversationContext: conversationContext || undefined,
         meetingLabel: "AI Delivery Board meeting",
+        organizationId: meeting.organizationId,
+        contextQuery: task,
       });
     } catch (error) {
       if (isAIBillingError(error)) {
@@ -301,6 +303,8 @@ export async function runDeliveryBoardDecisionVote(decisionId: string): Promise<
           topic: decision.topic,
           description: decision.description ?? undefined,
           conversationContext,
+          organizationId: decision.organizationId,
+          contextQuery: decision.topic,
         });
         return { agent, vote: result.vote as VoteChoice, reasoning: result.reasoning };
       }),

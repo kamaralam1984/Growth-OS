@@ -9,7 +9,7 @@ import { AiErrorBanner } from "@/app/board/_components/ai-error-banner";
 import { DECISION_CATEGORY_LABEL } from "@/lib/decision-category";
 import { userDecideOverride, type ActionResult } from "../actions";
 import { VotingBar, type VoteTally } from "./voting-bar";
-import type { DecisionCategory, DecisionStatus } from "@/generated/prisma/client";
+import type { DecisionCategory, DecisionStatus, RiskLevel } from "@/generated/prisma/client";
 
 export interface WarRoomDecision {
   id: string;
@@ -17,6 +17,8 @@ export interface WarRoomDecision {
   description: string | null;
   category: DecisionCategory;
   status: DecisionStatus;
+  riskLevel: RiskLevel | null;
+  financialImpact: number | null;
   votes: VoteTally[];
 }
 
@@ -38,7 +40,34 @@ const STATUS_VARIANT: Record<DecisionStatus, "default" | "secondary" | "outline"
   DELEGATED: "secondary",
 };
 
-function DecisionCard({ decision, canOverride }: { decision: WarRoomDecision; canOverride: boolean }) {
+// ESCALATED genuinely means "stop, a human has to decide" — it shouldn't
+// read identically to DELAYED/DELEGATED. Scoped as an extra className
+// rather than a new shared Badge variant, reusing the same amber tone
+// VotingBar already uses for an ESCALATE vote segment.
+const STATUS_BADGE_CLASSNAME: Partial<Record<DecisionStatus, string>> = {
+  ESCALATED: "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400",
+};
+
+// Only PROPOSAL_APPROVAL/QUOTATION_APPROVAL/CONTRACT_APPROVAL/INVOICE_APPROVAL/
+// ISSUE_ESCALATION ever get riskLevel: "HIGH" set (computeDecisionRiskLevel,
+// meeting-orchestrator.ts) — HIGH is the only value this app currently
+// produces, but the badge honors whatever RiskLevel is actually stored.
+const RISK_LEVEL_CLASSNAME: Record<RiskLevel, string> = {
+  LOW: "border-border bg-transparent text-muted-foreground",
+  MEDIUM: "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  HIGH: "border-orange-500/30 bg-orange-500/10 text-orange-600 dark:text-orange-400",
+  CRITICAL: "border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400",
+};
+
+function formatCurrency(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 0 }).format(amount);
+  } catch {
+    return `${currency} ${amount.toLocaleString()}`;
+  }
+}
+
+function DecisionCard({ decision, canOverride, currency }: { decision: WarRoomDecision; canOverride: boolean; currency: string }) {
   const router = useRouter();
   const [result, setResult] = useState<ActionResult | null>(null);
   const [pending, startTransition] = useTransition();
@@ -58,11 +87,23 @@ function DecisionCard({ decision, canOverride }: { decision: WarRoomDecision; ca
     <div className="glass-panel flex flex-col gap-3 rounded-2xl p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <p className="text-sm font-semibold text-foreground">{decision.topic}</p>
-        <Badge variant={STATUS_VARIANT[decision.status]}>{decision.status}</Badge>
+        <Badge variant={STATUS_VARIANT[decision.status]} className={STATUS_BADGE_CLASSNAME[decision.status]}>
+          {decision.status}
+        </Badge>
       </div>
-      <Badge variant="outline" className="w-fit">
-        {DECISION_CATEGORY_LABEL[decision.category]}
-      </Badge>
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="outline" className="w-fit">
+          {DECISION_CATEGORY_LABEL[decision.category]}
+        </Badge>
+        {decision.riskLevel && (
+          <Badge variant="outline" className={RISK_LEVEL_CLASSNAME[decision.riskLevel]}>
+            {decision.riskLevel} risk
+          </Badge>
+        )}
+        {decision.financialImpact != null && (
+          <Badge variant="outline">{formatCurrency(decision.financialImpact, currency)} impact</Badge>
+        )}
+      </div>
       {decision.description && <p className="text-xs text-muted-foreground">{decision.description}</p>}
 
       <VotingBar votes={decision.votes} />
@@ -77,9 +118,11 @@ function DecisionCard({ decision, canOverride }: { decision: WarRoomDecision; ca
         </div>
       )}
 
-      {canOverride && decision.status === "PENDING" && (
+      {canOverride && (decision.status === "PENDING" || decision.status === "ESCALATED") && (
         <div className="flex flex-col gap-2 border-t border-border/60 pt-3">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Human override</p>
+          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            {decision.status === "ESCALATED" ? "The board escalated this — your call" : "Human override"}
+          </p>
           <div className="flex gap-2">
             <Button size="sm" onClick={() => override("APPROVED")} disabled={pending}>
               {pending && activeStatus === "APPROVED" ? "Approving…" : "Approve"}
@@ -95,7 +138,15 @@ function DecisionCard({ decision, canOverride }: { decision: WarRoomDecision; ca
   );
 }
 
-export function DecisionBoard({ decisions, canOverride }: { decisions: WarRoomDecision[]; canOverride: boolean }) {
+export function DecisionBoard({
+  decisions,
+  canOverride,
+  currency,
+}: {
+  decisions: WarRoomDecision[];
+  canOverride: boolean;
+  currency: string;
+}) {
   if (decisions.length === 0) {
     return (
       <p className="rounded-2xl border border-dashed border-border py-10 text-center text-sm text-muted-foreground">
@@ -118,7 +169,7 @@ export function DecisionBoard({ decisions, canOverride }: { decisions: WarRoomDe
             </div>
             <div className="flex flex-col gap-3">
               {columnDecisions.map((decision) => (
-                <DecisionCard key={decision.id} decision={decision} canOverride={canOverride} />
+                <DecisionCard key={decision.id} decision={decision} canOverride={canOverride} currency={currency} />
               ))}
             </div>
           </div>

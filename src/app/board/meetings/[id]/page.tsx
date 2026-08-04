@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { EXECUTIVE_AGENT_TYPES } from "@/lib/ai/personas";
 import { deriveTrackedActionItemFields } from "@/lib/validations/action-items";
+import { getRevenueForecast } from "@/lib/revenue/forecast";
 import type { MeetingStatus } from "@/generated/prisma/client";
 
 import { AgentSeat, type WarRoomAgentSeat } from "./_components/agent-seat";
@@ -20,6 +21,7 @@ import { DecisionBoard, type WarRoomDecision } from "./_components/decision-boar
 import { TaskBoard, type WarRoomTask } from "./_components/task-board";
 import { MeetingNotes, type StructuredMeetingNotes } from "./_components/meeting-notes";
 import { TrackActionItemRow } from "./_components/track-action-item-row";
+import { StructuredActionItemCard } from "./_components/structured-action-item-card";
 import { WarRoomTimeline, type TimelineEntry } from "./_components/war-room-timeline";
 import { ProposeDecisionForm } from "./_components/propose-decision-form";
 import { RealtimeToast } from "./_components/realtime-toast";
@@ -119,7 +121,7 @@ export default async function WarRoomPage({ params }: { params: Promise<{ id: st
     .filter((user): user is NonNullable<typeof user> => user !== null);
 
   const agentIds = agentParticipants.map((a) => a.id);
-  const [memoryGroups, leads, orgAgents, orgMemberships, participantMemberships, trackedActionItems] = await Promise.all([
+  const [memoryGroups, leads, orgAgents, orgMemberships, participantMemberships, trackedActionItems, revenueForecast] = await Promise.all([
     agentIds.length > 0
       ? prisma.agentMemory.groupBy({
           by: ["agentId"],
@@ -150,12 +152,18 @@ export default async function WarRoomPage({ params }: { params: Promise<{ id: st
     }),
     prisma.actionItem.findMany({
       where: { meetingId: meeting.id },
-      select: { title: true },
+      select: { id: true, title: true, taskId: true, dueDate: true },
     }),
+    getRevenueForecast(meeting.organizationId, "month"),
   ]);
   const memoryByAgent = new Map(memoryGroups.map((g) => [g.agentId, { count: g._count._all, updatedAt: g._max.updatedAt }]));
   const roleByUserId = new Map(participantMemberships.map((m) => [m.userId, m.role]));
   const trackedTitles = new Set(trackedActionItems.map((a) => a.title));
+  // Correlates a structured notesJson.actionItems entry back to the real
+  // ActionItem row generateMeetingSummary created for it (same convention
+  // trackedTitles already uses for legacy narrative items) — lets the UI
+  // offer a real "Promote to task" button without a second lookup id.
+  const actionItemByTitle = new Map(trackedActionItems.map((a) => [a.title, a]));
 
   const agentSeats: WarRoomAgentSeat[] = agentParticipants.map((agent) => ({
     id: agent.id,
@@ -194,6 +202,8 @@ export default async function WarRoomPage({ params }: { params: Promise<{ id: st
     description: d.description,
     category: d.category,
     status: d.status,
+    riskLevel: d.riskLevel,
+    financialImpact: d.financialImpact,
     votes: d.votes.map((v) => ({ vote: v.vote, agentName: v.agent.name, reasoning: v.reasoning })),
   }));
 
@@ -206,6 +216,8 @@ export default async function WarRoomPage({ params }: { params: Promise<{ id: st
     dueDate: t.dueDate ? t.dueDate.toISOString() : null,
     ownerName: t.assignedToAgent?.name ?? t.assignedToUser?.name ?? "Unassigned",
     isAgent: Boolean(t.assignedToAgent),
+    kpi: t.kpi,
+    expectedImpact: t.expectedImpact,
   }));
 
   const timelineEntries: TimelineEntry[] = [];
@@ -292,6 +304,7 @@ export default async function WarRoomPage({ params }: { params: Promise<{ id: st
           pendingApprovals={pendingApprovals}
           revenueOpportunity={meeting.relatedLead?.estimatedValue ?? null}
           currency={meeting.organization.currency}
+          revenueForecast={revenueForecast.dataSufficient ? revenueForecast.total : null}
         />
 
         {/* The Table */}
@@ -320,14 +333,28 @@ export default async function WarRoomPage({ params }: { params: Promise<{ id: st
         {structuredNotes && (
           <MeetingNotes
             notes={structuredNotes}
-            renderActionItem={(item) => (
-              <TrackActionItemRow
-                meetingId={meeting.id}
-                text={item}
-                tracked={trackedTitles.has(deriveTrackedActionItemFields(item).title)}
-                canTrack={canManage}
-              />
-            )}
+            renderActionItem={(item) => {
+              if (typeof item === "string") {
+                return (
+                  <TrackActionItemRow
+                    meetingId={meeting.id}
+                    text={item}
+                    tracked={trackedTitles.has(deriveTrackedActionItemFields(item).title)}
+                    canTrack={canManage}
+                  />
+                );
+              }
+              const matched = actionItemByTitle.get(item.title);
+              return (
+                <StructuredActionItemCard
+                  item={item}
+                  actionItemId={matched?.id ?? null}
+                  taskId={matched?.taskId ?? null}
+                  dueDate={matched?.dueDate ? matched.dueDate.toISOString() : null}
+                  canManage={canManage}
+                />
+              );
+            }}
           />
         )}
 
@@ -345,7 +372,7 @@ export default async function WarRoomPage({ params }: { params: Promise<{ id: st
           </TabsContent>
 
           <TabsContent value="decisions">
-            <DecisionBoard decisions={decisions} canOverride={canManage} />
+            <DecisionBoard decisions={decisions} canOverride={canManage} currency={meeting.organization.currency ?? "USD"} />
           </TabsContent>
 
           <TabsContent value="tasks">

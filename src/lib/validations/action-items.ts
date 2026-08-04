@@ -2,6 +2,8 @@ import { z } from "zod";
 
 export const actionItemStatusSchema = z.enum(["OPEN", "IN_PROGRESS", "DONE", "CANCELLED"]);
 
+export const actionItemPrioritySchema = z.enum(["LOW", "NORMAL", "HIGH", "URGENT"]);
+
 export const createActionItemSchema = z.object({
   title: z.string().trim().min(1, "Give the action item a title.").max(300, "Keep the title under 300 characters."),
   description: z.string().trim().max(5000, "Keep the description under 5000 characters.").optional(),
@@ -11,6 +13,9 @@ export const createActionItemSchema = z.object({
   assignedToUserId: z.string().trim().min(1).optional(),
   assignedToAgentId: z.string().trim().min(1).optional(),
   dueDate: z.coerce.date().optional(),
+  priority: actionItemPrioritySchema.default("NORMAL"),
+  kpi: z.string().trim().max(300, "Keep the KPI under 300 characters.").optional(),
+  expectedImpact: z.string().trim().max(500, "Keep expected impact under 500 characters.").optional(),
 });
 
 export type CreateActionItemInput = z.infer<typeof createActionItemSchema>;

@@ -17,6 +17,8 @@ export interface WarRoomTask {
   dueDate: string | null;
   ownerName: string;
   isAgent: boolean;
+  kpi: string | null;
+  expectedImpact: string | null;
 }
 
 const PRIORITY_VARIANT: Record<MessagePriority, "default" | "secondary" | "outline" | "accent"> = {
@@ -42,6 +44,12 @@ function TaskRow({ task, canEdit }: { task: WarRoomTask; canEdit: boolean }) {
         <span>Owner: {task.ownerName}</span>
         {task.dueDate && <span>Due {new Date(task.dueDate).toLocaleDateString()}</span>}
       </div>
+      {(task.kpi || task.expectedImpact) && (
+        <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+          {task.kpi && <span>KPI: {task.kpi}</span>}
+          {task.expectedImpact && <span>Expected impact: {task.expectedImpact}</span>}
+        </div>
+      )}
 
       <div className="flex items-center gap-2">
         <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">

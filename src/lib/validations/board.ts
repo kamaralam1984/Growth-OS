@@ -55,6 +55,7 @@ export const createDecisionSchema = z.object({
   topic: z.string().trim().min(1, "A decision topic is required."),
   description: z.string().trim().optional(),
   category: decisionCategorySchema.default("GENERAL"),
+  financialImpact: z.coerce.number().nonnegative().optional(),
 });
 
 // z.input, same reasoning as CreateTaskInput above — `category` has a default.

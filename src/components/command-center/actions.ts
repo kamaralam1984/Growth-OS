@@ -148,6 +148,8 @@ export async function startAIMeeting(topic: string): Promise<AICommandActionResu
       agentName: ceoAgent.name,
       task: `Draft a short, concrete agenda (3-5 bullet points, plain text) for an ad-hoc AI Executive Board meeting about: "${trimmedTopic}". Output only the agenda text, no preamble.`,
       effort: "low",
+      organizationId,
+      contextQuery: trimmedTopic,
     });
     agenda = turn.content;
   } catch (err) {

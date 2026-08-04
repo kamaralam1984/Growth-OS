@@ -448,6 +448,7 @@ model Organization {
 
   boardReviews   BoardReview[]
   approvalPolicy OrganizationApprovalPolicy?
+  predictionCalibrations PredictionCalibration[]
 
   projectMembers         ProjectMember[]
   sprints                Sprint[]
@@ -960,6 +961,11 @@ model Task {
   // exists, since a checklist is optional and a task without one still
   // needs a manually-set progress value.
   progress           Int             @default(0)
+  // Carried over from ActionItem.kpi/expectedImpact on promotion
+  // (promoteActionItemToTask) — the metric and business impact an AI
+  // Executive Board execution plan attached to this item, if any.
+  kpi                String?         @db.Text
+  expectedImpact     String?         @db.Text
   type               TaskType?
   parentTaskId       String?
   labels             String[]
@@ -4748,6 +4754,41 @@ enum RiskLevel {
   CRITICAL
 }
 
+// ============================= Self-improvement: prediction calibration =============================
+// Real, closed feedback loop — not another dashboard stat. BoardReview.win-
+// Probability (an AI-estimated, honestly-elicited win probability, never
+// fabricated — see runReviewAgentTurn's system prompt) already sits next to
+// a real terminal outcome (Proposal.status ACCEPTED/REJECTED, joined via
+// BoardReview.docKind/docId). This model is the computed comparison between
+// the two, and its latest row is fed back into future review rounds
+// (review-orchestrator.ts) so past real outcomes change what a future
+// agent's win-probability estimate is grounded in.
+//
+// One row per computation run (append-only, never upserted) — same shape as
+// ExecutiveBriefing, not per-band rows, because the only real read pattern
+// is "give me the latest snapshot for org X," not a cross-run join.
+model PredictionCalibration {
+  id             String   @id @default(cuid())
+  organizationId String
+  // Real terminal (ACCEPTED/REJECTED) proposals this run was computed from.
+  // computePredictionCalibration() refuses to persist below a minimum
+  // sample size — same "honest or nothing" convention as everywhere else in
+  // this codebase, never a stat from a noisy handful of outcomes.
+  sampleSize     Int
+  // CalibrationBand[] (src/lib/ai/prediction-calibration.ts) — bands with
+  // zero samples are kept, never hidden, so the UI and the injected
+  // feedback text can honestly show "no data yet" per band.
+  bandsJson      Json
+  // Deterministic (not AI-generated) one-line narrative — zero AI cost to
+  // compute nightly for every org.
+  summary        String   @db.Text
+  computedAt     DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, computedAt])
+}
+
 // The Legal Agent's structured deep-dive for one BoardReview — real,
 // LLM-produced output (see runReviewAgentTurn's LegalReviewTurnSchema),
 // never a fabricated/default checklist.
@@ -5493,6 +5534,16 @@ model ActionItem {
   assignedToAgentId String?
   dueDate           DateTime?
   status            ActionItemStatus @default(OPEN)
+  // Reuses the existing MessagePriority enum rather than declaring a
+  // duplicate (same convention Task.priority already follows).
+  priority          MessagePriority  @default(NORMAL)
+  // The one metric that proves this item worked, and the concrete business
+  // impact it's expected to have — set by the AI Executive Board's
+  // execution-plan generation (generateMeetingSummary) or, for a manually
+  // created item, by whoever created it. Both optional: not every action
+  // item comes with a defined KPI.
+  kpi               String?          @db.Text
+  expectedImpact    String?          @db.Text
   // Set when an ActionItem is promoted into a real, trackable Task — never
   // required, since not every action item needs the full Task workflow.
   taskId            String?          @unique

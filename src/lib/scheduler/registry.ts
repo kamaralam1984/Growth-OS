@@ -5,6 +5,7 @@ import { ensureTodayClientHealthSnapshot } from "@/lib/clients/health-score";
 import { ensureTodayGrowthScoreSnapshot } from "@/lib/growth/score";
 import { generateGrowthImprovementPlan } from "@/lib/growth/improvement-plan";
 import { ensureLatestChurnRiskAssessment } from "@/lib/clients/churn";
+import { runPredictionCalibrationForOrg } from "@/lib/ai/prediction-calibration";
 import { generateClientOpportunities } from "@/lib/clients/opportunity-engine";
 import { refreshCompetitorSnapshot } from "@/lib/company-discovery/competitor-discovery";
 import { discoverMarketTrends } from "@/lib/market-intelligence/trend-discovery";
@@ -173,6 +174,29 @@ async function clientChurnAssessmentJob(): Promise<JobRunLog[]> {
     }
   }
   logs.push({ level: "info", message: `Assessed churn risk for ${clients.length} active client(s).` });
+  return logs;
+}
+
+/**
+ * Real, closed self-improvement loop (src/lib/ai/prediction-calibration.ts)
+ * — compares past AI-estimated Proposal Review Board win probabilities
+ * against real terminal Proposal outcomes, persists a calibration snapshot,
+ * and feeds the latest one back into the next review round. Pure Prisma
+ * aggregation, zero AI spend — the cheapest of the nightly jobs.
+ */
+async function predictionCalibrationJob(): Promise<JobRunLog[]> {
+  const orgs = await prisma.organization.findMany({ select: { id: true } });
+  const logs: JobRunLog[] = [];
+  let persisted = 0;
+  for (const org of orgs) {
+    try {
+      const result = await runPredictionCalibrationForOrg(org.id);
+      if (result.persisted) persisted += 1;
+    } catch (error) {
+      logs.push({ level: "error", message: error instanceof Error ? error.message : String(error), organizationId: org.id });
+    }
+  }
+  logs.push({ level: "info", message: `Computed prediction calibration for ${persisted} of ${orgs.length} organization(s) (rest had too few terminal proposals).` });
   return logs;
 }
 
@@ -1066,6 +1090,14 @@ export const JOB_DEFINITIONS: JobDefinition[] = [
     handler: clientChurnAssessmentJob,
     retryPolicy: { maxAttempts: 2, backoffMs: 30_000 },
     priority: 4, // nightly derived rollup — runs after growth-score-snapshot (1:00) so it reads today's ClientHealthSnapshot
+  },
+  {
+    key: "prediction-calibration-refresh",
+    name: "Nightly win-probability calibration",
+    cronExpression: "30 1 * * *",
+    handler: predictionCalibrationJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 30_000 },
+    priority: 5, // nightly derived rollup, same tier as growth-score-snapshot/client-churn-assessment — zero real AI spend (pure Prisma aggregation), no urgency
   },
   {
     key: "client-opportunity-scan",

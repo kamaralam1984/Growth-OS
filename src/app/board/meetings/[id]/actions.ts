@@ -12,7 +12,7 @@ import { evaluateAutomationRules } from "@/lib/automation-engine";
 import { fireWorkflowTrigger } from "@/lib/workflows/triggers";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { AINotConnectedError, AIBillingError } from "@/lib/ai/client";
-import { runMeetingRound, runMeetingDecisionVote, generateMeetingSummary } from "@/lib/ai/meeting-orchestrator";
+import { runMeetingRound, runMeetingDecisionVote, generateMeetingSummary, computeDecisionRiskLevel } from "@/lib/ai/meeting-orchestrator";
 import { createDecisionSchema, type CreateDecisionInput } from "@/lib/validations/board";
 import { trackNarrativeActionItemSchema, deriveTrackedActionItemFields } from "@/lib/validations/action-items";
 import type { MeetingStatus } from "@/generated/prisma/client";
@@ -156,6 +156,11 @@ export async function proposeDecision(meetingId: string, input: CreateDecisionIn
         topic: parsed.data.topic,
         description: parsed.data.description || null,
         category: parsed.data.category,
+        financialImpact: parsed.data.financialImpact ?? null,
+        // Deterministic, not AI-guessed — see computeDecisionRiskLevel's
+        // doc comment. Grounds the board's vote in real stakes instead of
+        // leaving escalation purely up to each agent's free choice.
+        riskLevel: computeDecisionRiskLevel(parsed.data.category, parsed.data.financialImpact),
       },
     });
     decisionId = decision.id;
@@ -290,7 +295,10 @@ export async function userDecideOverride(decisionId: string, status: "APPROVED" 
 
   const decision = await prisma.decision.findUnique({ where: { id: decisionId } });
   if (!decision) return { ok: false, error: "Decision not found." };
-  if (decision.status !== "PENDING") {
+  // ESCALATED is exactly the state that needs a human decision — it must
+  // stay overridable, not treated as already-finalized like APPROVED/
+  // REJECTED/DELAYED/DELEGATED are.
+  if (decision.status !== "PENDING" && decision.status !== "ESCALATED") {
     return { ok: false, error: "This decision has already been finalized." };
   }
 

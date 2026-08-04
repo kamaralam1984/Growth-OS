@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Clock, Users2, ListChecks, Gavel, ShieldAlert, DollarSign } from "lucide-react";
+import { Clock, Users2, ListChecks, Gavel, ShieldAlert, DollarSign, TrendingUp } from "lucide-react";
 
 import { AnimatedCounter } from "@/components/ui/animated-counter";
 
@@ -14,6 +14,11 @@ export interface LiveStatsStripProps {
   pendingApprovals: number;
   revenueOpportunity: number | null;
   currency?: string | null;
+  // Org-wide 30-day forecast from the real, deterministic revenue engine
+  // (src/lib/revenue/forecast.ts) — a different number from
+  // revenueOpportunity (which is just this meeting's one linked Lead), so
+  // both tiles stay, clearly labeled. Never AI-guessed.
+  revenueForecast: number | null;
 }
 
 function formatDuration(ms: number): string {
@@ -45,6 +50,7 @@ export function LiveStatsStrip({
   pendingApprovals,
   revenueOpportunity,
   currency,
+  revenueForecast,
 }: LiveStatsStripProps) {
   const [now, setNow] = useState(() => Date.now());
 
@@ -57,7 +63,7 @@ export function LiveStatsStrip({
   const durationMs = startedAt ? (endedAt ? new Date(endedAt).getTime() : now) - new Date(startedAt).getTime() : 0;
 
   return (
-    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
+    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-7">
       <Stat icon={Clock} label="Duration">
         {startedAt ? formatDuration(durationMs) : "Not started"}
       </Stat>
@@ -79,6 +85,13 @@ export function LiveStatsStrip({
               revenueOpportunity,
             )
           : "Not linked"}
+      </Stat>
+      <Stat icon={TrendingUp} label="Revenue forecast (30d)">
+        {revenueForecast != null
+          ? new Intl.NumberFormat(undefined, { style: "currency", currency: currency || "USD", maximumFractionDigits: 0 }).format(
+              revenueForecast,
+            )
+          : "Not enough data"}
       </Stat>
     </div>
   );

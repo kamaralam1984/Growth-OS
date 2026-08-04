@@ -299,6 +299,8 @@ export async function runAgentTask(taskId: string): Promise<ActionResult> {
         task.description ? ` Details: ${task.description}` : ""
       } Complete it now and produce the actual deliverable (the draft, analysis, or plan itself) — not a description of what you would do.`,
       effort: "high",
+      organizationId: task.organizationId,
+      contextQuery: task.title,
     });
 
     await prisma.$transaction([
