@@ -142,3 +142,20 @@
   --accent: var(--color-emerald-950);
   --accent-foreground: var(--color-emerald-100);
 }
+
+/* .theme-luxury's --accent above is a dark-theme-appropriate pairing (dark
+   bg, light text) — correct as the block above when the page is actually in
+   dark mode, but .theme-luxury itself is NOT theme-conditional, so on the
+   light theme it left every hover:bg-accent surface (outline buttons, the
+   Product dropdown menu, the mobile nav flyout) with a dark accent
+   background and dark --foreground text on top of it — nearly invisible.
+   Mirrors the exact light-vs-dark accent pairing :root[data-theme="light"]
+   already uses above (light bg, dark text) so light-theme contrast is
+   correct regardless of which page applies .theme-luxury. Needs the
+   descendant combinator, not a compound selector — data-theme lives on
+   <html>, .theme-luxury lives on a div wrapping just the homepage content
+   (src/app/page.tsx), never the same element. */
+:root[data-theme="light"] .theme-luxury {
+  --accent: var(--color-emerald-50);
+  --accent-foreground: var(--color-emerald-800);
+}
