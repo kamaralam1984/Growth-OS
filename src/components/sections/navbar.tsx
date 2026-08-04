@@ -180,7 +180,7 @@ function ProductMenu() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 6, scale: 0.98 }}
             transition={{ duration: DURATIONS.fast, ease: EASES.outExpo }}
-            className="glass-panel absolute left-1/2 top-full z-50 mt-3 w-72 -translate-x-1/2 rounded-2xl border border-border p-2 shadow-elevated"
+            className="absolute left-1/2 top-full z-50 mt-3 w-72 -translate-x-1/2 rounded-2xl border border-border bg-card p-2 shadow-elevated"
           >
             {PRODUCT_LINKS.map((link) => (
               <a
