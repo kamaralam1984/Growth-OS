@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { Navbar } from "@/components/sections/navbar";
+import { NavbarWithSession as Navbar } from "@/components/sections/navbar-with-session";
 import { Footer } from "@/components/sections/footer";
 import { ApiPlayground } from "@/components/sections/developer-platform/api-playground";
 

@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Container } from "@/components/ui/container";
 import { AnnouncementBar } from "@/components/ui/announcement-bar";
 import { Logo } from "@/components/brand/logo";
+import { ProfileMenu } from "@/app/dashboard/_components/profile-menu";
 
 /* Absolute hrefs ("/#id" / "/product#id" not bare "#id"): this Navbar renders
    on both "/" and "/product" (see src/app/product/page.tsx), and a bare
@@ -203,7 +204,7 @@ function ProductMenu() {
   );
 }
 
-function Navbar() {
+function Navbar({ user }: { user?: { name: string | null; email: string | null } | null }) {
   const [scrolled, setScrolled] = React.useState(false);
   const [mobileOpen, setMobileOpen] = React.useState(false);
 
@@ -249,9 +250,18 @@ function Navbar() {
 
             <div className="hidden items-center gap-3 md:flex">
               <ThemeToggle />
-              <Button size="sm" asChild>
-                <Link href="/register">Start free trial</Link>
-              </Button>
+              {user ? (
+                <>
+                  <Button size="sm" variant="outline" asChild>
+                    <Link href="/dashboard">Dashboard</Link>
+                  </Button>
+                  <ProfileMenu name={user.name} email={user.email} />
+                </>
+              ) : (
+                <Button size="sm" asChild>
+                  <Link href="/register">Start free trial</Link>
+                </Button>
+              )}
             </div>
 
             <div className="flex items-center gap-2 md:hidden">
@@ -294,11 +304,22 @@ function Navbar() {
                   {link.label}
                 </a>
               ))}
-              <Button size="sm" className="mt-2" asChild>
-                <Link href="/register" onClick={() => setMobileOpen(false)}>
-                  Start free trial
-                </Link>
-              </Button>
+              {user ? (
+                <div className="mt-2 flex items-center gap-3">
+                  <Button size="sm" variant="outline" className="flex-1" asChild>
+                    <Link href="/dashboard" onClick={() => setMobileOpen(false)}>
+                      Dashboard
+                    </Link>
+                  </Button>
+                  <ProfileMenu name={user.name} email={user.email} />
+                </div>
+              ) : (
+                <Button size="sm" className="mt-2" asChild>
+                  <Link href="/register" onClick={() => setMobileOpen(false)}>
+                    Start free trial
+                  </Link>
+                </Button>
+              )}
             </div>
           ) : null}
         </Container>

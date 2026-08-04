@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 
-import { Navbar } from "@/components/sections/navbar";
+import { NavbarWithSession as Navbar } from "@/components/sections/navbar-with-session";
 import { Footer } from "@/components/sections/footer";
 import { Container } from "@/components/ui/container";
 import { ContactForm } from "./_components/contact-form";

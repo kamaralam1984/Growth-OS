@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { Navbar } from "@/components/sections/navbar";
+import { NavbarWithSession as Navbar } from "@/components/sections/navbar-with-session";
 import { Hero } from "@/components/sections/hero";
 import { AIAgents } from "@/components/sections/ai-agents";
 import { Workflow } from "@/components/sections/workflow";
